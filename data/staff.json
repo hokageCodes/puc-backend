@@ -1,0 +1,10 @@
+[
+    {
+        "firstName": "Paul",
+        "lastName": "Usoro",
+        "email": "hashirama@firm.com",
+        "department": "Litigation",
+        "team": "FACT",
+        "profilePic": "https://cdn.example.com/images/hashirama.jpg"
+    }
+]
