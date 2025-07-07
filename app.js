@@ -34,4 +34,9 @@ app.use('/api/departments', departmentRoutes);
 app.use('/api/teams', teamRoutes);
 app.use('/api/practice-areas', practiceAreaRoutes);
 
+app.get('/', (req, res) => {
+  res.send('👋 Welcome to the PUC API - Server is running!');
+});
+
+
 export default app;
