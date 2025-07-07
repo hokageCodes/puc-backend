@@ -1,7 +1,7 @@
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
 
 const PracticeAreaSchema = new mongoose.Schema({
   name: { type: String, required: true, unique: true },
 });
 
-module.exports = mongoose.model('PracticeArea', PracticeAreaSchema);
+export default mongoose.model('PracticeArea', PracticeAreaSchema);
