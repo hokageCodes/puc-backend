@@ -1,7 +1,8 @@
-const express = require('express');
+import express from 'express';
+import { getPracticeAreas } from '../controllers/practiceAreaController.js';
+
 const router = express.Router();
-const { getPracticeAreas } = require('../controllers/practiceAreaController');
 
 router.get('/', getPracticeAreas);
 
-module.exports = router;
+export default router;

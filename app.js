@@ -4,31 +4,24 @@ import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
 import connectDB from './config/db.js';
 
-// Load env
+import staffRoutes from './routes/staffRoutes.js';
+import adminRoutes from './routes/adminRoutes.js';
+import departmentRoutes from './routes/departmentRoutes.js';
+import teamRoutes from './routes/teamRoutes.js';
+import practiceAreaRoutes from './routes/practiceAreaRoutes.js';
+
 dotenv.config();
 connectDB();
 
 const app = express();
 
 app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'https://paulusoro-2025.vercel.app',
-  ],
+  origin: process.env.CLIENT_URL || 'http://localhost:3000',
   credentials: true,
 }));
 app.use(cookieParser());
 app.use(express.json());
-
-// Static for uploads
 app.use('/uploads', express.static('uploads'));
-
-// Import routes
-import staffRoutes from './routes/staffRoutes.js';
-import adminRoutes from './routes/adminRoutes.js';
-import departmentRoutes from './routes/departmentRoutes.js';
-import teamRoutes from './routes/teamRoutes.js';
-import practiceAreaRoutes from './routes/practiceAreaRoutes.js';
 
 // Mount routes
 app.use('/api/staff', staffRoutes);
@@ -37,9 +30,11 @@ app.use('/api/departments', departmentRoutes);
 app.use('/api/teams', teamRoutes);
 app.use('/api/practice-areas', practiceAreaRoutes);
 
+// 👋 Home route
 app.get('/', (req, res) => {
   res.send('👋 Welcome to the PUC API - Server is running!');
 });
 
-
 export default app;
+
+
