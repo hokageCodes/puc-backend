@@ -1,6 +1,6 @@
-const Team = require('../models/Team');
+import Team from '../models/Team.js';
 
-exports.getTeams = async (req, res) => {
+export const getTeams = async (req, res) => {
   try {
     const teams = await Team.find().populate('department', 'name');
     res.json(teams);

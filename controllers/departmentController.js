@@ -1,7 +1,6 @@
-const Department = require('../models/Department');
+import Department from '../models/Department.js';
 
-// GET /api/departments
-exports.getDepartments = async (req, res) => {
+export const getDepartments = async (req, res) => {
   try {
     const departments = await Department.find();
     res.json(departments);
