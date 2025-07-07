@@ -1,59 +1,81 @@
-const Admin = require('../models/Admin');
+// controllers/adminController.js
 const jwt = require('jsonwebtoken');
+const Admin = require('../models/Admin');
 
+// Login
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
-    console.log('Login attempt:', { email, password: '***' });
     
+    // Find admin
     const admin = await Admin.findOne({ email });
-    console.log('Admin found:', !!admin);
-    
     if (!admin) {
-      console.log('No admin found with email:', email);
-      return res.status(400).json({ message: 'Invalid credentials' });
+      return res.status(401).json({ message: 'Invalid credentials' });
     }
-
-    console.log('Comparing passwords...');
-    const isMatch = await admin.comparePassword(password);
-    console.log('Password match:', isMatch);
     
+    // Check password
+    const isMatch = await admin.comparePassword(password);
     if (!isMatch) {
-      console.log('Password comparison failed');
-      return res.status(400).json({ message: 'Invalid credentials' });
+      return res.status(401).json({ message: 'Invalid credentials' });
     }
-
-    const token = jwt.sign({ id: admin._id }, process.env.JWT_SECRET, { expiresIn: '1d' });
-    console.log('JWT token generated successfully');
-
+    
+    // Create token
+    const token = jwt.sign(
+      { id: admin._id, email: admin.email },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+    
+    // Set cookie
     res.cookie('admin_token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
+      maxAge: 24 * 60 * 60 * 1000 // 24 hours
     });
-
-    console.log('Login successful for:', email);
-    res.json({ message: 'Login successful' });
     
+    res.json({
+      message: 'Login successful',
+      admin: {
+        id: admin._id,
+        email: admin.email,
+        isAdmin: admin.isAdmin
+      }
+    });
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 };
 
+// Get current admin (the missing /me route)
 exports.getMe = async (req, res) => {
-  const admin = await Admin.findById(req.user.id).select('-password');
-  res.json(admin);
+  try {
+    // req.user is set by the protect middleware
+    const admin = await Admin.findById(req.user.id).select('-password');
+    if (!admin) {
+      return res.status(404).json({ message: 'Admin not found' });
+    }
+    
+    res.json({
+      admin: {
+        id: admin._id,
+        email: admin.email,
+        isAdmin: admin.isAdmin
+      }
+    });
+  } catch (error) {
+    console.error('Get me error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
 };
 
-
+// Logout
 exports.logout = (req, res) => {
   res.clearCookie('admin_token', {
     httpOnly: true,
     sameSite: 'strict',
     secure: process.env.NODE_ENV === 'production',
   });
-
-  console.log('✅ Admin logged out. Cookie cleared.');
-  res.status(200).json({ message: 'Logged out' });
+  res.json({ message: 'Logged out successfully' });
 };

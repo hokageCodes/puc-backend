@@ -1,17 +1,21 @@
-const express = require('express');
-const router = express.Router();
-const {
+import express from 'express';
+import multer from 'multer';
+
+import {
   getAllStaff,
   getStaffById,
   createStaff,
   updateStaff,
   deleteStaff,
-} = require('../controllers/staffController');
+} from '../controllers/staffController.js';
+
+const router = express.Router();
+const upload = multer({ dest: 'uploads/' });
 
 router.get('/', getAllStaff);
 router.get('/:id', getStaffById);
-router.post('/', createStaff);
+router.post('/', upload.single('profilePhoto'), createStaff);
 router.put('/:id', updateStaff);
 router.delete('/:id', deleteStaff);
 
-module.exports = router;
+export default router;

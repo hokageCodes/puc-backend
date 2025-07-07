@@ -1,7 +1,8 @@
-import mongoose from 'mongoose'
+const mongoose = require('mongoose');
 
 const DepartmentSchema = new mongoose.Schema({
-name: { type: String, required: true, unique: true },
-})
+  name: { type: String, required: true, unique: true },
+  teams: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Team' }],
+});
 
-export default mongoose.model('Department', DepartmentSchema)
+module.exports = mongoose.model('Department', DepartmentSchema);
