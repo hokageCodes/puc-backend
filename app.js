@@ -10,15 +10,21 @@ import departmentRoutes from './routes/departmentRoutes.js';
 import teamRoutes from './routes/teamRoutes.js';
 import practiceAreaRoutes from './routes/practiceAreaRoutes.js';
 
+
+const allowedOrigins = [process.env.CLIENT_URL, 'http://localhost:3000'];
+
 dotenv.config();
 connectDB();
 
 const app = express();
 
+
 app.use(cors({
-  origin: process.env.CLIENT_URL,
+  origin: allowedOrigins,
   credentials: true,
 }));
+
+
 app.use(cookieParser());
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
