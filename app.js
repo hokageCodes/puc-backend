@@ -11,7 +11,10 @@ connectDB();
 const app = express();
 
 app.use(cors({
-  origin: 'http://localhost:3000',
+  origin: [
+    'http://localhost:3000',
+    'https://paulusoro-2025.vercel.app',
+  ],
   credentials: true,
 }));
 app.use(cookieParser());
