@@ -1,6 +1,8 @@
-const PracticeArea = require('../models/PracticeArea');
+// controllers/practiceAreaController.js
 
-exports.getPracticeAreas = async (req, res) => {
+import PracticeArea from '../models/PracticeArea.js';
+
+export const getPracticeAreas = async (req, res) => {
   try {
     const practiceAreas = await PracticeArea.find();
     res.json(practiceAreas);

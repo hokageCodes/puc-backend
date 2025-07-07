@@ -1,3 +1,5 @@
+// routes/practiceAreaRoutes.js
+
 import express from 'express';
 import { getPracticeAreas } from '../controllers/practiceAreaController.js';
 
