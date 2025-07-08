@@ -1,3 +1,4 @@
+// models/Admin.js
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 
@@ -16,7 +17,8 @@ const adminSchema = new mongoose.Schema({
   },
   isAdmin: { 
     type: Boolean, 
-    default: true 
+    default: true,
+    required: true
   },
 }, {
   timestamps: true
@@ -38,6 +40,11 @@ adminSchema.pre('save', async function (next) {
 
 adminSchema.methods.comparePassword = function (enteredPassword) {
   return bcrypt.compare(enteredPassword, this.password);
+};
+
+// Add a method to check if user is admin
+adminSchema.methods.isAdminUser = function() {
+  return this.isAdmin === true;
 };
 
 export default mongoose.model('Admin', adminSchema);

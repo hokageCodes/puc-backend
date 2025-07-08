@@ -27,23 +27,20 @@ export const getStaffById = async (req, res) => {
 };
 
 // POST /api/staff
+
 export const createStaff = async (req, res) => {
   try {
     const data = req.body;
 
-    const profilePhotoPath = req.file ? `/uploads/${req.file.filename}` : '';
+    const profilePhotoUrl = req.file?.path; // ✅ Cloudinary file URL
 
-    // Destructure out possible ObjectId refs
     let { department, team, practiceAreas, ...rest } = data;
 
-    // Convert empty strings to undefined
     if (department === '') department = undefined;
     if (team === '') team = undefined;
-    // For practiceAreas (if it's an array), filter out empty strings
     if (practiceAreas) {
       if (typeof practiceAreas === 'string') {
-        // if single string, wrap into array
-        practiceAreas = practiceAreas ? [practiceAreas] : [];
+        practiceAreas = [practiceAreas];
       }
       practiceAreas = practiceAreas.filter((id) => id !== '');
       if (practiceAreas.length === 0) practiceAreas = undefined;
@@ -54,19 +51,17 @@ export const createStaff = async (req, res) => {
       ...(department ? { department } : {}),
       ...(team ? { team } : {}),
       ...(practiceAreas ? { practiceAreas } : {}),
-      profilePhoto: profilePhotoPath,
+      profilePhoto: profilePhotoUrl, // ✅ Save Cloudinary URL
     });
 
     await newStaff.save();
     res.status(201).json(newStaff);
   } catch (err) {
-    console.error('❌ Mongoose Validation Error:', err);
-    res.status(400).json({
-      error: 'Error creating staff',
-      details: err.message || err,
-    });
+    console.error('❌ Staff creation failed:', err);
+    res.status(400).json({ error: 'Failed to create staff', details: err.message });
   }
 };
+
 
 
 // PUT /api/staff/:id
@@ -85,8 +80,9 @@ export const deleteStaff = async (req, res) => {
   try {
     const deleted = await Staff.findByIdAndDelete(req.params.id);
     if (!deleted) return res.status(404).json({ error: 'Staff not found' });
-    res.json({ message: 'Staff deleted' });
+    res.json({ message: 'Staff deleted successfully' });
   } catch (err) {
-    res.status(400).json({ error: 'Error deleting staff', details: err });
+    res.status(500).json({ error: 'Error deleting staff', details: err.message });
   }
 };
+
