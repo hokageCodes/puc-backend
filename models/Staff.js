@@ -15,7 +15,12 @@ const StaffSchema = new mongoose.Schema({
     department: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', required: true },
     team: { type: mongoose.Schema.Types.ObjectId, ref: 'Team' },
   
-    practiceAreas: [{ type: mongoose.Schema.Types.ObjectId, ref: 'PracticeArea' }],
+    practiceAreas: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'PracticeArea'
+      }
+    ],
   
     isTeamLead: { type: Boolean, default: false },
     isLineManager: { type: Boolean, default: false },

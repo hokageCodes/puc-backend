@@ -68,6 +68,7 @@ app.use('/api/departments', departmentRoutes);
 app.use('/api/teams', teamRoutes);
 app.use('/api/practice-areas', practiceAreaRoutes);
 
+
 // Root route
 app.get('/', (req, res) => {
   res.json({ 

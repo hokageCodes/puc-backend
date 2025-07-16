@@ -3,29 +3,33 @@ import Staff from '../models/Staff.js';
 // GET /api/staff
 export const getAllStaff = async (req, res) => {
   try {
-    const staff = await Staff.find()
+    const staffList = await Staff.find()
       .populate('department', 'name')
       .populate('team', 'name')
-      .populate('practiceAreas', 'name');
+      .populate('practiceAreas', 'name'); // ✅ Populate names here too
 
-    res.json(staff);
+    res.json(staffList);
   } catch (err) {
-    console.error('❌ Error in getAllStaff:', err);
-    res.status(500).json({ error: 'Failed to fetch staff', details: err.message });
+    res.status(500).json({ error: 'Failed to fetch staff list', details: err.message });
   }
 };
+
 
 // GET /api/staff/:id
 export const getStaffById = async (req, res) => {
   try {
-    const staff = await Staff.findById(req.params.id);
+    const staff = await Staff.findById(req.params.id)
+      .populate('department', 'name')
+      .populate('team', 'name')
+      .populate('practiceAreas', 'name'); // ✅ Ensure this is included
+
     if (!staff) return res.status(404).json({ error: 'Staff not found' });
+
     res.json(staff);
   } catch (err) {
-    res.status(500).json({ error: 'Error getting staff' });
+    res.status(500).json({ error: 'Failed to fetch staff', details: err.message });
   }
 };
-
 // POST /api/staff
 
 export const createStaff = async (req, res) => {
@@ -69,9 +73,15 @@ export const updateStaff = async (req, res) => {
   try {
     const updated = await Staff.findByIdAndUpdate(req.params.id, req.body, { new: true });
     if (!updated) return res.status(404).json({ error: 'Staff not found' });
-    res.json(updated);
+
+    const populated = await Staff.findById(updated._id)
+      .populate('department', 'name')
+      .populate('team', 'name')
+      .populate('practiceAreas', 'name');
+
+    res.json(populated);
   } catch (err) {
-    res.status(400).json({ error: 'Error updating staff', details: err });
+    res.status(500).json({ error: 'Failed to update staff', details: err.message });
   }
 };
 
