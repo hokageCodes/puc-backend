@@ -29,7 +29,6 @@ async function fixPracticeAreas() {
         staff.practiceAreas = fixedPracticeAreas;
         await staff.save();
         updatedCount++;
-        console.log(`✔ Updated: ${staff.firstName} ${staff.lastName}`);
       }
     }
 
