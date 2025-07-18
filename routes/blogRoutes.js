@@ -1,14 +1,17 @@
 // routes/blogRoutes.js
-const express = require('express');
-const router = express.Router();
-const {
+import express from 'express';
+import {
   createBlog,
   getAllBlogs,
-  getBlogBySlug,
-} = require('../controllers/blogController');
+  getBlogBySlug
+} from '../controllers/blogController.js';
 
-router.post('/', createBlog);
-router.get('/', getAllBlogs);
-router.get('/:slug', getBlogBySlug);
+import { protect } from '../middleware/auth.js';
 
-module.exports = router;
+const router = express.Router();
+
+router.post('/', protect, createBlog); // Protected
+router.get('/', getAllBlogs); // Public
+router.get('/:slug', getBlogBySlug); // Public
+
+export default router;

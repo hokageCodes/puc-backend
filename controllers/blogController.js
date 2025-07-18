@@ -1,36 +1,52 @@
 // controllers/blogController.js
-const Blog = require('../models/Blog');
+import Blog from '../models/Blog.js';
 
-// @desc Create blog post
-exports.createBlog = async (req, res) => {
+export const createBlog = async (req, res) => {
+  const { title, slug, coverImage, tags, content } = req.body;
+
+  if (!title || !slug || !coverImage || !content) {
+    return res.status(400).json({ message: 'Missing required fields' });
+  }
+
   try {
-    const { title, slug, coverImage, tags, content } = req.body;
+    const exists = await Blog.findOne({ slug });
+    if (exists) return res.status(409).json({ message: 'Slug already exists' });
 
-    const newBlog = await Blog.create({ title, slug, coverImage, tags, content });
+    const newBlog = await Blog.create({
+      title,
+      slug,
+      coverImage,
+      tags,
+      content,
+      createdBy: req.user.id
+    });
 
     res.status(201).json(newBlog);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Create blog error:', err.message);
+    res.status(500).json({ message: 'Server error' });
   }
 };
 
-// @desc Get all blogs
-exports.getAllBlogs = async (req, res) => {
+export const getAllBlogs = async (req, res) => {
   try {
     const blogs = await Blog.find().sort({ createdAt: -1 });
-    res.status(200).json(blogs);
+    res.json(blogs);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Get blogs error:', err.message);
+    res.status(500).json({ message: 'Server error' });
   }
 };
 
-// @desc Get single blog by slug
-exports.getBlogBySlug = async (req, res) => {
+export const getBlogBySlug = async (req, res) => {
+  const { slug } = req.params;
   try {
-    const blog = await Blog.findOne({ slug: req.params.slug });
+    const blog = await Blog.findOne({ slug });
     if (!blog) return res.status(404).json({ message: 'Blog not found' });
-    res.status(200).json(blog);
+
+    res.json(blog);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Get blog error:', err.message);
+    res.status(500).json({ message: 'Server error' });
   }
 };

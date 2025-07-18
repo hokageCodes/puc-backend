@@ -42,16 +42,32 @@ export const login = async (req, res) => {
       { expiresIn: '24h' }
     );
 
-    // Enhanced cookie configuration
+    console.log('Generated token:', token.substring(0, 50) + '...');
+
+    // Enhanced cookie configuration for production
     const cookieOptions = {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'strict',
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
-      path: '/'
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours in milliseconds
+      path: '/',
+      domain: process.env.NODE_ENV === 'production' ? undefined : undefined // Let browser handle domain
     };
 
+    console.log('Setting cookie with options:', cookieOptions);
+    console.log('Environment:', process.env.NODE_ENV);
+
+    // Set the cookie
     res.cookie('admin_token', token, cookieOptions);
+
+    // Also set a test cookie to verify cookie setting works
+    res.cookie('test_cookie', 'test_value', {
+      httpOnly: false, // Make it accessible to JS for testing
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      maxAge: 24 * 60 * 60 * 1000,
+      path: '/'
+    });
 
     // Prepare response data
     const responseData = {
@@ -61,10 +77,17 @@ export const login = async (req, res) => {
         email: admin.email,
         isAdmin: admin.isAdmin,
       },
+      // Add debug info
+      debug: {
+        cookieSet: true,
+        environment: process.env.NODE_ENV,
+        tokenLength: token.length
+      }
     };
 
     console.log('Login successful, sending response:', responseData);
 
+    // Send response
     res.json(responseData);
   } catch (error) {
     console.error('Login error:', error);
@@ -105,10 +128,12 @@ export const logout = (req, res) => {
   const cookieOptions = {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'strict',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     path: '/'
   };
 
   res.clearCookie('admin_token', cookieOptions);
+  res.clearCookie('test_cookie', cookieOptions);
+  
   res.json({ message: 'Logged out successfully' });
 };
