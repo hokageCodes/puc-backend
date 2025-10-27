@@ -35,6 +35,9 @@ export const getStaffById = async (req, res) => {
 export const createStaff = async (req, res) => {
   try {
     const data = req.body;
+    
+    console.log('📦 Received staff data:', JSON.stringify(data, null, 2));
+    console.log('📸 Profile photo:', req.file?.path);
 
     const profilePhotoUrl = req.file?.path; // ✅ Cloudinary file URL
 
@@ -79,7 +82,12 @@ export const createStaff = async (req, res) => {
     res.status(201).json(populated);
   } catch (err) {
     console.error('❌ Staff creation failed:', err);
-    res.status(400).json({ error: 'Failed to create staff', details: err.message });
+    // Better error handling for 500 errors
+    res.status(err.name === 'ValidationError' ? 400 : 500).json({ 
+      error: 'Failed to create staff', 
+      details: err.message,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
   }
 };
 
