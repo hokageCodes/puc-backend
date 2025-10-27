@@ -50,8 +50,18 @@ export const createStaff = async (req, res) => {
       if (practiceAreas.length === 0) practiceAreas = undefined;
     }
 
+    // Handle leave management fields
+    const leaveFields = {
+      isOnProbation: data.isOnProbation === 'true' || data.isOnProbation === true,
+      employeeId: data.employeeId || undefined,
+      hireDate: data.hireDate ? new Date(data.hireDate) : undefined,
+      isTeamLead: data.isTeamLead === 'true' || data.isTeamLead === true,
+      isLineManager: data.isLineManager === 'true' || data.isLineManager === true,
+    };
+
     const newStaff = new Staff({
       ...rest,
+      ...leaveFields,
       ...(department ? { department } : {}),
       ...(team ? { team } : {}),
       ...(practiceAreas ? { practiceAreas } : {}),
@@ -59,7 +69,14 @@ export const createStaff = async (req, res) => {
     });
 
     await newStaff.save();
-    res.status(201).json(newStaff);
+    
+    // Populate and return
+    const populated = await Staff.findById(newStaff._id)
+      .populate('department', 'name')
+      .populate('team', 'name')
+      .populate('practiceAreas', 'name');
+    
+    res.status(201).json(populated);
   } catch (err) {
     console.error('❌ Staff creation failed:', err);
     res.status(400).json({ error: 'Failed to create staff', details: err.message });
