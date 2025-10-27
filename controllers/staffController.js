@@ -56,8 +56,9 @@ export const createStaff = async (req, res) => {
     // Handle leave management fields
     const leaveFields = {
       isOnProbation: data.isOnProbation === 'true' || data.isOnProbation === true,
-      employeeId: data.employeeId || undefined,
-      hireDate: data.hireDate ? new Date(data.hireDate) : undefined,
+      // Only add employeeId if it's provided
+      ...(data.employeeId && data.employeeId.trim() ? { employeeId: data.employeeId.trim() } : {}),
+      ...(data.hireDate ? { hireDate: new Date(data.hireDate) } : {}),
       isTeamLead: data.isTeamLead === 'true' || data.isTeamLead === true,
       isLineManager: data.isLineManager === 'true' || data.isLineManager === true,
     };
