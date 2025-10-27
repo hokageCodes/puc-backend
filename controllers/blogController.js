@@ -154,15 +154,29 @@ export const getPublicBlogs = async (req, res) => {
   }
 };
 
+export const getBlogById = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const blog = await Blog.findById(id);
+    if (!blog) return res.status(404).json({ message: 'Blog not found' });
+    res.json(blog);
+  } catch (err) {
+    console.error('Get blog error:', err.message);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 export const getBlogBySlug = async (req, res) => {
   const { slug } = req.params;
   try {
     const blog = await Blog.findOne({ slug });
     if (!blog) return res.status(404).json({ message: 'Blog not found' });
 
-    // Increment views
-    blog.views += 1;
-    await blog.save();
+    // Only increment views for published posts
+    if (blog.status === 'published') {
+      blog.views += 1;
+      await blog.save();
+    }
 
     res.json(blog);
   } catch (err) {

@@ -16,11 +16,16 @@ const upload = multer({ storage });
 
 const router = express.Router();
 
-// Admin routes (protected)
+// Admin routes (protected) - MUST come before /:slug route
 router.post('/', protect, upload.single('coverImage'), createBlog);
 router.put('/:id', protect, upload.single('coverImage'), updateBlog);
 router.delete('/:id', protect, deleteBlog);
 router.get('/admin/all', protect, getAllBlogs); // Get all blogs with filters
+router.get('/id/:id', protect, async (req, res) => {
+  // Get single blog by ID for admin
+  const { getBlogById } = await import('../controllers/blogController.js');
+  getBlogById(req, res);
+});
 
 // Public routes
 router.get('/public', getPublicBlogs); // Get only published blogs
