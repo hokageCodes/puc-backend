@@ -72,6 +72,7 @@ export const login = async (req, res) => {
     // Prepare response data
     const responseData = {
       message: 'Login successful',
+      token: token, // Add token to response for localStorage fallback
       admin: {
         id: admin._id,
         email: admin.email,
