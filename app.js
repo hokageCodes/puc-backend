@@ -32,13 +32,28 @@ const corsOptions = {
       'https://paulusoro.com',
       'https://www.paulusoro.com',
       'http://localhost:3000',
+      'http://localhost:3001',
+      'http://localhost:3002',
       'https://localhost:3000',
+      'https://localhost:3001',
+      'https://localhost:3002',
       process.env.CLIENT_URL
     ].filter(Boolean);
 
-    console.log('CORS check - Origin:', origin, 'Allowed:', allowedOrigins);
+    // Allow localhost in all environments for development ease
+    const isLocalhost = origin && (
+      origin.startsWith('http://localhost') || 
+      origin.startsWith('https://localhost') || 
+      origin.startsWith('http://127.0.0.1') ||
+      origin.startsWith('https://127.0.0.1')
+    );
 
-    if (allowedOrigins.includes(origin)) {
+    // Allow if it's in the allowed list OR if it's localhost
+    const isAllowed = allowedOrigins.includes(origin) || isLocalhost;
+
+    console.log('CORS check - Origin:', origin, 'isLocalhost:', isLocalhost, 'allowed:', isAllowed);
+
+    if (isAllowed) {
       callback(null, true);
     } else {
       console.log('Blocked by CORS:', origin);
