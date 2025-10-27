@@ -12,6 +12,10 @@ const blogSchema = new mongoose.Schema({
     required: true,
     unique: true
   },
+  excerpt: {
+    type: String,
+    trim: true
+  },
   coverImage: {
     type: String,
     required: true
@@ -21,14 +25,37 @@ const blogSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  status: {
+    type: String,
+    enum: ['draft', 'published', 'scheduled'],
+    default: 'draft'
+  },
+  publishedAt: {
+    type: Date,
+    default: null
+  },
+  scheduledAt: {
+    type: Date,
+    default: null
+  },
+  featured: {
+    type: Boolean,
+    default: false
+  },
+  views: {
+    type: Number,
+    default: 0
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Admin'
   },
-  createdAt: {
-    type: Date,
-    default: Date.now
+  updatedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin'
   }
+}, {
+  timestamps: true
 });
 
 export default mongoose.model('Blog', blogSchema);
