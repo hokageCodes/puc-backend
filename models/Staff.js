@@ -35,6 +35,9 @@ const StaffSchema = new mongoose.Schema({
     teamLeadId: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff' },
     lineManagerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff' },
   
+    // Authentication
+    password: { type: String, select: false },
+  
     createdAt: { type: Date, default: Date.now },
   });
   

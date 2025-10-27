@@ -13,7 +13,7 @@ export const authenticateStaff = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
     // Get staff from database
-    const staff = await Staff.findById(decoded.id);
+    const staff = await Staff.findById(decoded.id).select('-password');
     
     if (!staff) {
       return res.status(401).json({ message: 'Staff not found' });

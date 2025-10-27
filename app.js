@@ -7,6 +7,7 @@ import connectDB from './config/db.js';
 
 import blogRoutes from './routes/blogRoutes.js';
 import staffRoutes from './routes/staffRoutes.js';
+import staffAuthRoutes from './routes/staffAuthRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
 import departmentRoutes from './routes/departmentRoutes.js';
 import teamRoutes from './routes/teamRoutes.js';
@@ -95,6 +96,7 @@ app.use('/uploads', express.static('uploads'));
 
 // API routes
 app.use('/api/staff', staffRoutes);
+app.use('/api/staff-auth', staffAuthRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/departments', departmentRoutes);
 app.use('/api/teams', teamRoutes);
