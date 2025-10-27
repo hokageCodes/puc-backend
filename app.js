@@ -11,6 +11,7 @@ import adminRoutes from './routes/adminRoutes.js';
 import departmentRoutes from './routes/departmentRoutes.js';
 import teamRoutes from './routes/teamRoutes.js';
 import practiceAreaRoutes from './routes/practiceAreaRoutes.js';
+import leaveRoutes from './routes/leaveRoutes.js';
 
 dotenv.config();
 
@@ -99,6 +100,7 @@ app.use('/api/departments', departmentRoutes);
 app.use('/api/teams', teamRoutes);
 app.use('/api/practice-areas', practiceAreaRoutes);
 app.use('/api/blogs', blogRoutes);
+app.use('/api/leave', leaveRoutes);
 
 // Root route
 app.get('/', (req, res) => {

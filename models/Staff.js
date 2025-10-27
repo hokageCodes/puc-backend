@@ -7,7 +7,7 @@ const StaffSchema = new mongoose.Schema({
     lastName: { type: String, required: true },
     email: { type: String, unique: true, required: true },
     phoneNumber: { type: String, required: true },
-    profilePhoto: { type: String, default: '' }, // <-- ✅
+    profilePhoto: { type: String, default: '' },
   
     bio: { type: String },
     position: { type: String },
@@ -22,6 +22,14 @@ const StaffSchema = new mongoose.Schema({
       }
     ],
   
+    // Leave Management Fields
+    isOnProbation: { type: Boolean, default: true },
+    employeeId: { type: String, unique: true },
+    azureId: { type: String },
+    hireDate: { type: Date },
+    confirmationDate: { type: Date },
+  
+    // Role & Reporting Fields
     isTeamLead: { type: Boolean, default: false },
     isLineManager: { type: Boolean, default: false },
     teamLeadId: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff' },
