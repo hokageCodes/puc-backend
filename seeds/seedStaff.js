@@ -6,6 +6,7 @@ import Staff from '../models/Staff.js';
 import PracticeArea from '../models/PracticeArea.js';
 import Department from '../models/Department.js';
 import Team from '../models/Team.js';
+import bcrypt from 'bcryptjs';
 
 await mongoose.connect(process.env.MONGODB_URI || process.env.MONGO_URI, {
   useNewUrlParser: true,
@@ -60,8 +61,23 @@ for (let i = 1; i <= 20; i++) {
   });
 }
 
-// Create in DB
-await Staff.insertMany(staffData);
-console.log(`✅ Seeded ${staffData.length} staff members`);
+// Create in DB and set default passwords
+const currentYear = new Date().getFullYear();
+console.log('🔐 Setting up default passwords...');
+
+const createdStaff = await Staff.insertMany(staffData);
+console.log(`✅ Seeded ${createdStaff.length} staff members`);
+
+// Set default passwords
+for (const staff of createdStaff) {
+  const defaultPassword = `PUC${staff.firstName}${currentYear}`;
+  const salt = await bcrypt.genSalt(10);
+  staff.password = await bcrypt.hash(defaultPassword, salt);
+  await staff.save();
+  console.log(`   ${staff.firstName} ${staff.lastName}: ${defaultPassword}`);
+}
+
+console.log(`\n📝 Default password format: PUC{FirstName}{Year}`);
+console.log(`📧 Staff can login with their email and default password`);
 
 await mongoose.disconnect();
