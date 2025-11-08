@@ -6,7 +6,7 @@ import Staff from '../models/Staff.js';
 import PracticeArea from '../models/PracticeArea.js';
 import Department from '../models/Department.js';
 import Team from '../models/Team.js';
-import bcrypt from 'bcryptjs';
+import Counter from '../models/Counter.js';
 
 await mongoose.connect(process.env.MONGODB_URI || process.env.MONGO_URI, {
   useNewUrlParser: true,
@@ -24,6 +24,7 @@ const randomFrom = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
 // Clear existing staff
 await Staff.deleteMany({});
+await Counter.findByIdAndUpdate({ _id: 'staffCode' }, { $set: { seq: 0 } }, { upsert: true });
 
 // Create 20 staff members
 const staffData = [];
@@ -50,34 +51,20 @@ for (let i = 1; i <= 20; i++) {
     lastName,
     email,
     phoneNumber,
-    profilePic: '',
+    profilePhoto: '',
     bio,
     position,
     department: department._id,
     team: team ? team._id : null,
     practiceAreas: selectedPracticeAreas,
-    isTeamLead: i % 7 === 0,
-    isLineManager: i % 5 === 0
+    staffCode: `PUC${String(i).padStart(3, '0')}`,
+    isVisible: true,
   });
 }
-
-// Create in DB and set default passwords
-const currentYear = new Date().getFullYear();
-console.log('🔐 Setting up default passwords...');
 
 const createdStaff = await Staff.insertMany(staffData);
 console.log(`✅ Seeded ${createdStaff.length} staff members`);
 
-// Set default passwords
-for (const staff of createdStaff) {
-  const defaultPassword = `PUC${staff.firstName}${currentYear}`;
-  const salt = await bcrypt.genSalt(10);
-  staff.password = await bcrypt.hash(defaultPassword, salt);
-  await staff.save();
-  console.log(`   ${staff.firstName} ${staff.lastName}: ${defaultPassword}`);
-}
-
-console.log(`\n📝 Default password format: PUC{FirstName}{Year}`);
-console.log(`📧 Staff can login with their email and default password`);
+await Counter.findByIdAndUpdate({ _id: 'staffCode' }, { $set: { seq: createdStaff.length } }, { upsert: true });
 
 await mongoose.disconnect();

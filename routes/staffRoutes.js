@@ -9,14 +9,37 @@ import {
   getStaffById,
 } from '../controllers/staffController.js';
 
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+});
+
+const handleUpload = (handler) => async (req, res, next) => {
+  upload.single('profilePhoto')(req, res, async (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError) {
+        const message = err.code === 'LIMIT_FILE_SIZE'
+          ? 'Profile photo is too large. Maximum size is 5MB.'
+          : err.message;
+        return res.status(400).json({ error: 'Upload error', message });
+      }
+      return res.status(400).json({ error: 'Upload error', message: err.message });
+    }
+
+    try {
+      await handler(req, res, next);
+    } catch (error) {
+      next(error);
+    }
+  });
+};
 
 const router = express.Router();
 
 router.get('/', getAllStaff);
 router.get('/:id', getStaffById);
-router.post('/', upload.single('profilePhoto'), createStaff); // ✅ Cloudinary upload here
-router.put('/:id', updateStaff);
+router.post('/', handleUpload(createStaff));
+router.put('/:id', handleUpload(updateStaff));
 router.delete('/:id', deleteStaff);
 
 export default router;

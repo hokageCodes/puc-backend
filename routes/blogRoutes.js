@@ -8,7 +8,9 @@ import {
   deleteBlog,
   getAllBlogs,
   getPublicBlogs,
-  getBlogBySlug
+  getBlogBySlug,
+  toggleBlogLike,
+  getBlogLikeStatus
 } from '../controllers/blogController.js';
 import { protect } from '../middleware/auth.js';
 
@@ -29,6 +31,8 @@ router.get('/id/:id', protect, async (req, res) => {
 
 // Public routes
 router.get('/public', getPublicBlogs); // Get only published blogs
+router.get('/:slug/like-status', getBlogLikeStatus);
+router.post('/:slug/like', toggleBlogLike);
 router.get('/:slug', getBlogBySlug);
 
 export default router;

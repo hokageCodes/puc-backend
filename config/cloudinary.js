@@ -16,4 +16,10 @@ const storage = new CloudinaryStorage({
   },
 });
 
+if (!process.env.CLOUDINARY_API_KEY) {
+  console.error('❌ Cloudinary API key missing. Check your .env file.');
+} else {
+  console.log('✅ Cloudinary config loaded for cloud:', process.env.CLOUDINARY_CLOUD_NAME);
+}
+
 export { cloudinary, storage };

@@ -168,8 +168,13 @@ export const getBlogById = async (req, res) => {
 
 export const getBlogBySlug = async (req, res) => {
   const { slug } = req.params;
+  const { visitorId } = req.query;
   try {
-    const blog = await Blog.findOne({ slug });
+    const query = Blog.findOne({ slug });
+    if (visitorId) {
+      query.select('+likedVisitorIds');
+    }
+    const blog = await query;
     if (!blog) return res.status(404).json({ message: 'Blog not found' });
 
     // Only increment views for published posts
@@ -178,9 +183,72 @@ export const getBlogBySlug = async (req, res) => {
       await blog.save();
     }
 
-    res.json(blog);
+    const blogData = blog.toObject();
+
+    if (visitorId) {
+      blogData.isLiked = blog.likedVisitorIds?.includes(visitorId);
+      delete blogData.likedVisitorIds;
+    }
+
+    blogData.likesCount = blog.likesCount || 0;
+
+    res.json(blogData);
   } catch (err) {
     console.error('Get blog error:', err.message);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+export const toggleBlogLike = async (req, res) => {
+  const { slug } = req.params;
+  const { visitorId } = req.body;
+
+  if (!visitorId) {
+    return res.status(400).json({ message: 'visitorId is required' });
+  }
+
+  try {
+    const blog = await Blog.findOne({ slug }).select('+likedVisitorIds');
+    if (!blog) return res.status(404).json({ message: 'Blog not found' });
+
+    const existingIndex = blog.likedVisitorIds.findIndex((id) => id === visitorId);
+    let isLiked;
+
+    if (existingIndex === -1) {
+      blog.likedVisitorIds.push(visitorId);
+      isLiked = true;
+    } else {
+      blog.likedVisitorIds.splice(existingIndex, 1);
+      isLiked = false;
+    }
+
+    blog.likesCount = blog.likedVisitorIds.length;
+    await blog.save();
+
+    res.json({ likesCount: blog.likesCount, isLiked });
+  } catch (err) {
+    console.error('Toggle blog like error:', err.message);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+export const getBlogLikeStatus = async (req, res) => {
+  const { slug } = req.params;
+  const { visitorId } = req.query;
+
+  if (!visitorId) {
+    return res.status(400).json({ message: 'visitorId is required' });
+  }
+
+  try {
+    const blog = await Blog.findOne({ slug }).select('+likedVisitorIds');
+    if (!blog) return res.status(404).json({ message: 'Blog not found' });
+
+    const isLiked = blog.likedVisitorIds.includes(visitorId);
+
+    res.json({ likesCount: blog.likesCount || 0, isLiked });
+  } catch (err) {
+    console.error('Get blog like status error:', err.message);
     res.status(500).json({ message: 'Server error' });
   }
 };

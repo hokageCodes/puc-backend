@@ -1,20 +1,43 @@
-// app.js or server.js - Fixed CORS configuration
+// server.js - FIXED VERSION
+import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
+import multer from 'multer';
+import { v2 as cloudinary } from 'cloudinary';
 import connectDB from './config/db.js';
 
 import blogRoutes from './routes/blogRoutes.js';
 import staffRoutes from './routes/staffRoutes.js';
-import staffAuthRoutes from './routes/staffAuthRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
 import departmentRoutes from './routes/departmentRoutes.js';
 import teamRoutes from './routes/teamRoutes.js';
 import practiceAreaRoutes from './routes/practiceAreaRoutes.js';
-import leaveRoutes from './routes/leaveRoutes.js';
+import authRoutes from './routes/authRoutes.js';
 
+// Load environment variables FIRST
 dotenv.config();
+
+// Debug: Log Cloudinary env vars (remove after testing)
+console.log('🔍 Environment Check:', {
+  CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '❌ MISSING',
+  CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY ? '✅ Present' : '❌ MISSING',
+  CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET ? '✅ Present' : '❌ MISSING',
+});
+
+// Configure Cloudinary AFTER dotenv
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+// Verify Cloudinary config
+if (!process.env.CLOUDINARY_API_KEY) {
+  console.error('❌ CRITICAL: Cloudinary API key missing!');
+} else {
+  console.log('✅ Cloudinary configured successfully');
+}
 
 // Connect to MongoDB
 connectDB();
@@ -24,10 +47,9 @@ const app = express();
 // Cookie parser MUST come before CORS and routes
 app.use(cookieParser());
 
-// CORS configuration - CRITICAL for cookie handling
+// CORS configuration
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
 
     const allowedOrigins = [
@@ -42,7 +64,6 @@ const corsOptions = {
       process.env.CLIENT_URL
     ].filter(Boolean);
 
-    // Allow localhost in all environments for development ease
     const isLocalhost = origin && (
       origin.startsWith('http://localhost') || 
       origin.startsWith('https://localhost') || 
@@ -50,7 +71,6 @@ const corsOptions = {
       origin.startsWith('https://127.0.0.1')
     );
 
-    // Allow if it's in the allowed list OR if it's localhost
     const isAllowed = allowedOrigins.includes(origin) || isLocalhost;
 
     console.log('CORS check - Origin:', origin, 'isLocalhost:', isLocalhost, 'allowed:', isAllowed);
@@ -62,7 +82,7 @@ const corsOptions = {
       callback(new Error('Not allowed by CORS'));
     }
   },
-  credentials: true, // CRITICAL: This must be true for cookies to work
+  credentials: true,
   optionsSuccessStatus: 200,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: [
@@ -79,7 +99,7 @@ app.use(cors(corsOptions));
 // JSON parsing middleware
 app.use(express.json());
 
-// Add comprehensive request logging
+// Request logging
 app.use((req, res, next) => {
   console.log(`${req.method} ${req.path}`, {
     cookies: Object.keys(req.cookies),
@@ -96,13 +116,12 @@ app.use('/uploads', express.static('uploads'));
 
 // API routes
 app.use('/api/staff', staffRoutes);
-app.use('/api/staff-auth', staffAuthRoutes);
+app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/departments', departmentRoutes);
 app.use('/api/teams', teamRoutes);
 app.use('/api/practice-areas', practiceAreaRoutes);
 app.use('/api/blogs', blogRoutes);
-app.use('/api/leave', leaveRoutes);
 
 // Root route
 app.get('/', (req, res) => {
@@ -130,7 +149,7 @@ app.get('/test-cookie', (req, res) => {
     httpOnly: false,
     secure: process.env.NODE_ENV === 'production',
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge: 60000 // 1 minute
+    maxAge: 60000
   });
   
   res.json({ 
@@ -147,10 +166,28 @@ app.use((req, res) => {
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Error:', err);
-  res.status(500).json({ 
-    error: 'Internal server error',
-    message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
+
+  if (err instanceof multer.MulterError) {
+    const message = err.code === 'LIMIT_FILE_SIZE'
+      ? 'Uploaded file is too large. Maximum size is 5MB.'
+      : err.message;
+    return res.status(400).json({ error: 'Upload error', message });
+  }
+
+  const status = err.status || 500;
+  const message = err.message || 'Something went wrong';
+
+  res.status(status).json({
+    error: status === 500 ? 'Internal server error' : 'Request failed',
+    message: process.env.NODE_ENV === 'development' ? message : status === 500 ? 'Something went wrong' : message,
+    ...(process.env.NODE_ENV === 'development' && err.stack ? { stack: err.stack } : {}),
   });
+});
+
+const PORT = process.env.PORT || 5000;
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
 
 export default app;

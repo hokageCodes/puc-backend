@@ -1,45 +1,74 @@
 import mongoose from 'mongoose';
-import StaffLeaveBalance from './StaffLeaveBalance.js';
-import LeaveType from './LeaveType.js';
 
-const StaffSchema = new mongoose.Schema({
+const STAFF_DIVISIONS = ['legal', 'admin', 'other'];
+const AUTH_PROVIDERS = ['local'];
+
+const StaffSchema = new mongoose.Schema(
+  {
     firstName: { type: String, required: true },
     lastName: { type: String, required: true },
-    email: { type: String, unique: true, required: true },
-    phoneNumber: { type: String, required: true },
+    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    phoneNumber: { type: String },
+
     profilePhoto: { type: String, default: '' },
-  
     bio: { type: String },
     position: { type: String },
-  
-    department: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', required: true },
+
+    employeeId: { type: String, unique: true, sparse: true },
+    staffCode: { type: String, unique: true, sparse: true },
+
+    division: { type: String, enum: STAFF_DIVISIONS, default: 'legal' },
+    roles: { type: [String], default: ['staff'] },
+    leaveEnabled: { type: Boolean, default: true },
+
+    hireDate: { type: Date },
+    confirmationDate: { type: Date },
+
+    department: { type: mongoose.Schema.Types.ObjectId, ref: 'Department' },
     team: { type: mongoose.Schema.Types.ObjectId, ref: 'Team' },
-  
     practiceAreas: [
       {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'PracticeArea'
-      }
+        ref: 'PracticeArea',
+      },
     ],
-  
-    // Leave Management Fields
-    isOnProbation: { type: Boolean, default: true },
-    employeeId: { type: String, unique: true },
-    azureId: { type: String },
-    hireDate: { type: Date },
-    confirmationDate: { type: Date },
-  
-    // Role & Reporting Fields
-    isTeamLead: { type: Boolean, default: false },
-    isLineManager: { type: Boolean, default: false },
+
     teamLeadId: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff' },
     lineManagerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff' },
-  
-    // Authentication
-    password: { type: String, select: false },
-  
-    createdAt: { type: Date, default: Date.now },
-  });
-  
+
+    isVisible: { type: Boolean, default: true },
+
+    passwordHash: { type: String },
+    passwordResetToken: { type: String },
+    passwordResetExpires: { type: Date },
+    passwordSetAt: { type: Date },
+
+    lastLoginAt: { type: Date },
+    lastLoginProvider: { type: String, enum: AUTH_PROVIDERS, default: 'local' },
+    tokenVersion: { type: Number, default: 0 },
+  },
+  {
+    timestamps: true,
+  }
+);
+
+StaffSchema.index({ email: 1 });
+StaffSchema.index({ staffCode: 1 }, { unique: true, sparse: true });
+StaffSchema.index({ roles: 1 });
+
+StaffSchema.methods.hasRole = function hasRole(role) {
+  if (!Array.isArray(this.roles)) return false;
+  return this.roles.includes(role);
+};
+
+StaffSchema.set('toJSON', {
+  transform(_, ret) {
+    delete ret.passwordHash;
+    delete ret.passwordResetToken;
+    delete ret.passwordResetExpires;
+    delete ret.tokenVersion;
+    return ret;
+  },
+});
 
 export default mongoose.model('Staff', StaffSchema);

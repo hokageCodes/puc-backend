@@ -3,8 +3,12 @@ import jwt from 'jsonwebtoken';
 import Admin from '../models/Admin.js';
 
 export const protect = async (req, res, next) => {
-  // Fixed: Use the correct cookie name that matches the backend controller
-  const token = req.cookies.admin_token; // Changed from 'token' to 'admin_token'
+  // Prefer cookie token, but support Authorization header fallback for SPA fetches
+  let token = req.cookies.admin_token;
+
+  if (!token && req.headers.authorization?.startsWith('Bearer ')) {
+    token = req.headers.authorization.split(' ')[1];
+  }
 
   console.log('Auth middleware check:', {
     hasToken: !!token,
