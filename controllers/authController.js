@@ -8,7 +8,7 @@ const ACCESS_TOKEN_TTL = process.env.JWT_ACCESS_EXPIRES_IN || '15m';
 const REFRESH_TOKEN_TTL = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
 const REFRESH_COOKIE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-const ACCESS_SECRET = () => {
+const getAccessSecret = () => {
   const secret = process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET;
   if (!secret) {
     throw new Error('JWT access secret is not configured');
@@ -16,7 +16,7 @@ const ACCESS_SECRET = () => {
   return secret;
 };
 
-const REFRESH_SECRET = () => {
+const getRefreshSecret = () => {
   const secret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
   if (!secret) {
     throw new Error('JWT refresh secret is not configured');
@@ -78,7 +78,7 @@ const createAccessToken = (staff, scope) =>
       staffCode: staff.staffCode,
       tokenVersion: staff.tokenVersion,
     },
-    ACCESS_SECRET(),
+    getAccessSecret(),
     { expiresIn: ACCESS_TOKEN_TTL }
   );
 
@@ -89,7 +89,7 @@ const createRefreshToken = (staff, scope) =>
       scope,
       tokenVersion: staff.tokenVersion,
     },
-    REFRESH_SECRET(),
+    getRefreshSecret(),
     { expiresIn: REFRESH_TOKEN_TTL }
   );
 
@@ -168,7 +168,7 @@ export const refresh = async (req, res) => {
 
     let decoded;
     try {
-      decoded = jwt.verify(refreshToken, REFRESH_SECRET());
+      decoded = jwt.verify(refreshToken, getRefreshSecret());
     } catch (err) {
       clearRefreshCookie(res, requestedScope);
       return res.status(401).json({ message: 'Invalid refresh token' });
@@ -207,7 +207,7 @@ export const logout = async (req, res) => {
 
   if (refreshToken) {
     try {
-      const decoded = jwt.verify(refreshToken, REFRESH_SECRET());
+      const decoded = jwt.verify(refreshToken, getRefreshSecret());
       await Staff.findByIdAndUpdate(decoded.sub, { $inc: { tokenVersion: 1 } });
     } catch (err) {
       console.warn('Failed to decode refresh token on logout:', err.message);

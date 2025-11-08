@@ -2,6 +2,14 @@
 import jwt from 'jsonwebtoken';
 import Admin from '../models/Admin.js';
 
+const getAccessSecret = () => {
+  const secret = process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error('JWT access secret is not configured');
+  }
+  return secret;
+};
+
 export const login = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -32,15 +40,17 @@ export const login = async (req, res) => {
     }
 
     // Create JWT token
-    const token = jwt.sign(
-      { 
-        id: admin._id, 
-        email: admin.email,
-        isAdmin: admin.isAdmin 
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '24h' }
-    );
+    const tokenPayload = {
+      sub: admin._id,
+      id: admin._id, // Legacy support
+      email: admin.email,
+      isAdmin: admin.isAdmin,
+      scope: 'cms',
+      roles: ['admin', 'cms'],
+      tokenVersion: 0,
+    };
+
+    const token = jwt.sign(tokenPayload, getAccessSecret(), { expiresIn: '24h' });
 
     console.log('Generated token:', token.substring(0, 50) + '...');
 
@@ -72,7 +82,7 @@ export const login = async (req, res) => {
     // Prepare response data
     const responseData = {
       message: 'Login successful',
-      token: token, // Add token to response for localStorage fallback
+      token, // Add token to response for localStorage fallback
       admin: {
         id: admin._id,
         email: admin.email,

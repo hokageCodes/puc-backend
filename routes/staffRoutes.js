@@ -8,6 +8,7 @@ import {
   deleteStaff,
   getStaffById,
 } from '../controllers/staffController.js';
+import { requireAuth, requireRoles } from '../middleware/auth.js';
 
 const upload = multer({
   storage,
@@ -35,6 +36,9 @@ const handleUpload = (handler) => async (req, res, next) => {
 };
 
 const router = express.Router();
+
+router.use(requireAuth({ scope: 'cms' }));
+router.use(requireRoles('admin', 'hr', 'cms'));
 
 router.get('/', getAllStaff);
 router.get('/:id', getStaffById);

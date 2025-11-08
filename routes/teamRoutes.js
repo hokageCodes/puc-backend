@@ -1,8 +1,11 @@
 import express from 'express';
 import { getTeams } from '../controllers/teamController.js';
+import { requireAuth, requireRoles } from '../middleware/auth.js';
 
 const router = express.Router();
 
-router.get('/', getTeams);
+router.use(requireAuth({ scope: 'cms' }));
+
+router.get('/', requireRoles('admin', 'hr', 'cms'), getTeams);
 
 export default router;

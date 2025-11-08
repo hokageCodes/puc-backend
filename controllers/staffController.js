@@ -1,7 +1,8 @@
 import Staff from '../models/Staff.js';
 import Counter from '../models/Counter.js';
+import { ALL_ROLES_SET, DEFAULT_ROLE } from '../config/rbac.js';
 
-const ALLOWED_ROLES = new Set(['staff', 'teamLead', 'lineManager', 'hr', 'admin', 'cms']);
+const ALLOWED_ROLES = ALL_ROLES_SET;
 const STAFF_DIVISIONS = ['legal', 'admin', 'other'];
 
 const parseBoolean = (value, defaultValue) => {
@@ -28,7 +29,7 @@ const normalizeRoles = (value) => {
     .map((role) => role.toString().trim())
     .filter((role) => role.length > 0 && ALLOWED_ROLES.has(role));
 
-  const unique = Array.from(new Set(['staff', ...sanitized]));
+  const unique = Array.from(new Set([DEFAULT_ROLE, ...sanitized]));
   return unique;
 };
 
