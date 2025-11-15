@@ -20,6 +20,11 @@ const getTokenFromRequest = (req, scope) => {
   const cookieName = scope === 'cms' ? 'admin_token' : null;
   const legacyCookieToken = cookieName ? req.cookies?.[cookieName] : null;
 
+  // Debug logging in development
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[Auth] Scope: ${scope}, Has Auth Header: ${!!req.headers.authorization}, Has Cookie: ${!!legacyCookieToken}`);
+  }
+
   return headerToken || legacyCookieToken;
 };
 
@@ -27,13 +32,22 @@ export const requireAuth = ({ scope = 'leave' } = {}) => async (req, res, next) 
   try {
     const token = getTokenFromRequest(req, scope);
     if (!token) {
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[Auth] No token found for scope: ${scope}, path: ${req.path}`);
+      }
       return res.status(401).json({ message: 'Not authorized, no token provided' });
     }
 
     let decoded;
     try {
       decoded = jwt.verify(token, getAccessSecret());
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[Auth] Token decoded successfully, scope: ${decoded.scope}, expected: ${scope}`);
+      }
     } catch (err) {
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[Auth] Token verification failed:`, err.message);
+      }
       return res.status(401).json({ message: 'Invalid or expired token' });
     }
 
