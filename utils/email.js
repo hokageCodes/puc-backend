@@ -18,20 +18,62 @@ const getTransporter = () => {
     return transporter;
   }
 
+  const port = Number(SMTP_PORT);
+  const isSecure = getBooleanEnv('SMTP_SECURE', port === 465);
+  
   transporter = nodemailer.createTransport({
     host: SMTP_HOST,
-    port: Number(SMTP_PORT),
-    secure: getBooleanEnv('SMTP_SECURE', Number(SMTP_PORT) === 465),
+    port,
+    secure: isSecure,
+    requireTLS: !isSecure && port === 587, // Office 365 requires STARTTLS on port 587
     auth: SMTP_USER && SMTP_PASS ? { user: SMTP_USER, pass: SMTP_PASS } : undefined,
+    tls: {
+      rejectUnauthorized: false, // Office 365 sometimes has cert issues
+      minVersion: 'TLSv1.2',
+    },
+    connectionTimeout: 30000, // 30 seconds - increased for slow networks
+    greetingTimeout: 30000,
+    socketTimeout: 30000,
+    debug: process.env.NODE_ENV === 'development', // Enable debug logging
+    logger: process.env.NODE_ENV === 'development', // Log to console
   });
 
   return transporter;
 };
 
+// Test SMTP connection before sending
+export const verifyConnection = async () => {
+  const mailer = getTransporter();
+  if (!mailer) {
+    console.warn('⚠️ No SMTP transporter configured');
+    return false;
+  }
+  
+  try {
+    await mailer.verify();
+    console.log('✅ SMTP connection verified successfully');
+    return true;
+  } catch (error) {
+    console.error('❌ SMTP verification failed:', error.message);
+    if (error.code === 'ETIMEDOUT') {
+      console.error('💡 Connection timeout - check firewall/network settings');
+      console.error('💡 Try: Test-NetConnection -ComputerName smtp.office365.com -Port 587');
+    }
+    return false;
+  }
+};
+
 export const sendEmail = async ({ to, subject, html, text }) => {
   const mailer = getTransporter();
+  
+  // Clean EMAIL_FROM - remove quotes if present, support "Name <email>" format
+  let fromEmail = process.env.EMAIL_FROM || 'no-reply@paulusoro.com';
+  fromEmail = fromEmail.replace(/^["']|["']$/g, ''); // Remove surrounding quotes
+  // Keep the full "Name <email>" format if present, otherwise use as-is
+  // Nodemailer supports both formats
+  
   const mailOptions = {
-    from: process.env.EMAIL_FROM || 'no-reply@paulusoro.com',
+    from: fromEmail,
     to,
     subject,
     text,
@@ -43,7 +85,22 @@ export const sendEmail = async ({ to, subject, html, text }) => {
     return;
   }
 
-  await mailer.sendMail(mailOptions);
+  try {
+    await mailer.sendMail(mailOptions);
+    console.log('✅ Email sent successfully to:', to);
+  } catch (error) {
+    console.error('❌ Email send error:', error.message);
+    console.error('Error code:', error.code);
+    if (error.code === 'ETIMEDOUT') {
+      console.error('💡 Troubleshooting:');
+      console.error('   1. Check if port 587 is open: Test-NetConnection -ComputerName smtp.office365.com -Port 587');
+      console.error('   2. Verify SMTP credentials in Office 365 admin center');
+      console.error('   3. Ensure "Authenticated SMTP" is enabled for the mailbox');
+      console.error('   4. Check if your IP is blocked by Office 365');
+    }
+    console.error('Full error:', error);
+    throw error;
+  }
 };
 
 const baseUrl = (path = '') => {
