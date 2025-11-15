@@ -14,6 +14,7 @@ import departmentRoutes from './routes/departmentRoutes.js';
 import teamRoutes from './routes/teamRoutes.js';
 import practiceAreaRoutes from './routes/practiceAreaRoutes.js';
 import authRoutes from './routes/authRoutes.js';
+import leaveRoutes from './routes/leaveRoutes.js';
 
 // Load environment variables FIRST
 dotenv.config();
@@ -116,6 +117,7 @@ app.use('/uploads', express.static('uploads'));
 
 // API routes
 app.use('/api/staff', staffRoutes);
+app.use('/api/leave', leaveRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/departments', departmentRoutes);

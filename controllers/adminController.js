@@ -107,30 +107,24 @@ export const login = async (req, res) => {
 };
 
 export const getMe = async (req, res) => {
-  try {
-    console.log('Getting admin profile for user:', req.user);
-    
-    const admin = await Admin.findById(req.user.id).select('-password');
-    if (!admin) {
-      console.log('Admin not found for ID:', req.user.id);
-      return res.status(404).json({ message: 'Admin not found' });
-    }
-
-    const responseData = {
-      admin: {
-        id: admin._id,
-        email: admin.email,
-        isAdmin: admin.isAdmin,
-      },
-    };
-
-    console.log('Get me successful, sending response:', responseData);
-
-    res.json(responseData);
-  } catch (error) {
-    console.error('Get me error:', error);
-    res.status(500).json({ message: 'Server error' });
+  if (!req.user) {
+    return res.status(401).json({ message: 'Not authenticated' });
   }
+
+  const adminProfile = {
+    id: req.user.id,
+    email: req.user.email,
+    roles: req.user.roles || [],
+    division: req.user.division,
+    staffCode: req.user.staffCode,
+    leaveEnabled: req.user.leaveEnabled,
+  };
+
+  if (!adminProfile.roles.includes('admin') && !adminProfile.roles.includes('cms')) {
+    return res.status(403).json({ message: 'Not authorized for CMS' });
+  }
+
+  res.json({ admin: adminProfile });
 };
 
 export const logout = (req, res) => {

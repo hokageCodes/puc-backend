@@ -231,6 +231,8 @@ export const sendInvite = async (req, res) => {
     }
 
     const token = await createPasswordToken(staff);
+    staff.lastInviteSentAt = new Date();
+    await staff.save({ validateBeforeSave: false, timestamps: false });
     const emailContent = buildActivationEmail(staff, token);
     await sendEmail({ to: staff.email, ...emailContent });
 

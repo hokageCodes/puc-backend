@@ -42,6 +42,7 @@ const StaffSchema = new mongoose.Schema(
     passwordResetToken: { type: String },
     passwordResetExpires: { type: Date },
     passwordSetAt: { type: Date },
+    lastInviteSentAt: { type: Date },
 
     lastLoginAt: { type: Date },
     lastLoginProvider: { type: String, enum: AUTH_PROVIDERS, default: 'local' },
