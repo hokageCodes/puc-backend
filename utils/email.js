@@ -12,7 +12,23 @@ const getTransporter = () => {
   if (transporter) return transporter;
 
   const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS } = process.env;
+  
+  // Enhanced logging for production debugging
+  console.log('🔍 SMTP Configuration Check:', {
+    SMTP_HOST: SMTP_HOST ? `${SMTP_HOST.substring(0, 10)}...` : '❌ MISSING',
+    SMTP_PORT: SMTP_PORT || '❌ MISSING',
+    SMTP_USER: SMTP_USER ? `${SMTP_USER.substring(0, 5)}...` : '❌ MISSING',
+    SMTP_PASS: SMTP_PASS ? '✅ Present' : '❌ MISSING',
+    SMTP_SECURE: process.env.SMTP_SECURE || 'not set',
+    NODE_ENV: process.env.NODE_ENV || 'not set',
+  });
+  
   if (!SMTP_HOST || !SMTP_PORT) {
+    console.error('❌ SMTP configuration missing. Required variables:');
+    console.error('   - SMTP_HOST:', SMTP_HOST || 'MISSING');
+    console.error('   - SMTP_PORT:', SMTP_PORT || 'MISSING');
+    console.error('   - SMTP_USER:', SMTP_USER ? 'Present' : 'MISSING');
+    console.error('   - SMTP_PASS:', SMTP_PASS ? 'Present' : 'MISSING');
     console.warn('📭 SMTP configuration missing. Emails will be logged to console.');
     transporter = null;
     return transporter;

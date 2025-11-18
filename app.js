@@ -145,6 +145,36 @@ app.get('/health', (req, res) => {
   });
 });
 
+// SMTP diagnostic endpoint (for debugging production issues)
+app.get('/api/diagnostic/smtp', async (req, res) => {
+  const { verifyConnection } = await import('./utils/email.js');
+  
+  const smtpConfig = {
+    SMTP_HOST: process.env.SMTP_HOST ? '✅ Set' : '❌ Missing',
+    SMTP_PORT: process.env.SMTP_PORT || '❌ Missing',
+    SMTP_USER: process.env.SMTP_USER ? '✅ Set' : '❌ Missing',
+    SMTP_PASS: process.env.SMTP_PASS ? '✅ Set' : '❌ Missing',
+    SMTP_SECURE: process.env.SMTP_SECURE || 'not set (defaults based on port)',
+    EMAIL_FROM: process.env.EMAIL_FROM || '❌ Missing',
+    NODE_ENV: process.env.NODE_ENV || 'not set',
+  };
+  
+  let connectionStatus = 'Not tested';
+  try {
+    const isConnected = await verifyConnection();
+    connectionStatus = isConnected ? '✅ Connected' : '❌ Connection failed';
+  } catch (error) {
+    connectionStatus = `❌ Error: ${error.message}`;
+  }
+  
+  res.json({
+    smtpConfig,
+    connectionStatus,
+    timestamp: new Date().toISOString(),
+    note: 'Check Render dashboard Environment variables section if any are missing'
+  });
+});
+
 // Cookie test endpoint
 app.get('/test-cookie', (req, res) => {
   res.cookie('test_cookie', 'working', {
