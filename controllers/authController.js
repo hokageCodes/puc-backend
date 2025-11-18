@@ -239,7 +239,31 @@ export const sendInvite = async (req, res) => {
     res.json({ message: 'Activation email sent' });
   } catch (err) {
     console.error('Send invite error:', err);
-    res.status(500).json({ message: 'Unable to send activation email' });
+    
+    // Provide more specific error messages based on error type
+    let errorMessage = 'Unable to send activation email';
+    let statusCode = 500;
+    
+    if (err.code === 'SMTP_NOT_CONFIGURED') {
+      errorMessage = 'Email service is not configured. Please configure SMTP settings.';
+      statusCode = 503; // Service Unavailable
+    } else if (err.code === 'ETIMEDOUT' || err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
+      errorMessage = 'Email service connection failed. Please check SMTP configuration.';
+    } else if (err.code === 'EAUTH' || err.responseCode === 535) {
+      errorMessage = 'Email authentication failed. Please verify SMTP credentials.';
+    } else if (err.message && err.message.includes('SMTP')) {
+      errorMessage = 'Email service error. Please check SMTP configuration.';
+    }
+    
+    // In development, include more details
+    const errorDetails = process.env.NODE_ENV === 'development' 
+      ? { details: err.message, code: err.code }
+      : undefined;
+    
+    res.status(statusCode).json({ 
+      message: errorMessage,
+      ...errorDetails
+    });
   }
 };
 
