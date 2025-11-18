@@ -149,29 +149,50 @@ app.get('/health', (req, res) => {
 app.get('/api/diagnostic/smtp', async (req, res) => {
   const { verifyConnection } = await import('./utils/email.js');
   
-  const smtpConfig = {
+  const emailConfig = {
+    // Resend (Recommended - easiest!)
+    RESEND_API_KEY: process.env.RESEND_API_KEY ? '✅ Set (RECOMMENDED!)' : '❌ Missing',
+    RESEND_FROM: process.env.RESEND_FROM || 'not set',
+    
+    // SMTP (Fallback)
     SMTP_HOST: process.env.SMTP_HOST ? '✅ Set' : '❌ Missing',
     SMTP_PORT: process.env.SMTP_PORT || '❌ Missing',
     SMTP_USER: process.env.SMTP_USER ? '✅ Set' : '❌ Missing',
     SMTP_PASS: process.env.SMTP_PASS ? '✅ Set' : '❌ Missing',
     SMTP_SECURE: process.env.SMTP_SECURE || 'not set (defaults based on port)',
+    
+    // Common
     EMAIL_FROM: process.env.EMAIL_FROM || '❌ Missing',
     NODE_ENV: process.env.NODE_ENV || 'not set',
   };
   
   let connectionStatus = 'Not tested';
-  try {
-    const isConnected = await verifyConnection();
-    connectionStatus = isConnected ? '✅ Connected' : '❌ Connection failed';
-  } catch (error) {
-    connectionStatus = `❌ Error: ${error.message}`;
+  let recommendation = '';
+  
+  if (process.env.RESEND_API_KEY) {
+    connectionStatus = '✅ Resend API configured (no connection test needed)';
+    recommendation = 'Resend is configured and will be used automatically. This is the most reliable option!';
+  } else {
+    try {
+      const isConnected = await verifyConnection();
+      connectionStatus = isConnected ? '✅ SMTP Connected' : '❌ SMTP Connection failed';
+      if (!isConnected) {
+        recommendation = 'SMTP connection failed. Consider using Resend API (RESEND_API_KEY) - it\'s free and much more reliable!';
+      }
+    } catch (error) {
+      connectionStatus = `❌ SMTP Error: ${error.message}`;
+      recommendation = 'SMTP is having issues. Use Resend API (RESEND_API_KEY) instead - sign up at https://resend.com (free 3,000 emails/month)';
+    }
   }
   
   res.json({
-    smtpConfig,
+    emailConfig,
     connectionStatus,
+    recommendation: recommendation || 'All good!',
     timestamp: new Date().toISOString(),
-    note: 'Check Render dashboard Environment variables section if any are missing'
+    note: process.env.RESEND_API_KEY 
+      ? 'Resend is configured - emails will use Resend API (most reliable!)'
+      : 'Check Render dashboard Environment variables section if any are missing. Consider Resend API for better reliability.'
   });
 });
 

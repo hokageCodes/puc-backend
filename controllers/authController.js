@@ -238,7 +238,11 @@ export const sendInvite = async (req, res) => {
 
     res.json({ message: 'Activation email sent' });
   } catch (err) {
-    console.error('Send invite error:', err);
+    console.error('❌ Send invite error:', err);
+    console.error('Error stack:', err.stack);
+    console.error('Error code:', err.code);
+    console.error('Error message:', err.message);
+    console.error('Full error object:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
     
     // Provide more specific error messages based on error type
     let errorMessage = 'Unable to send activation email';
@@ -247,22 +251,25 @@ export const sendInvite = async (req, res) => {
     if (err.code === 'SMTP_NOT_CONFIGURED') {
       errorMessage = 'Email service is not configured. Please configure SMTP settings.';
       statusCode = 503; // Service Unavailable
-    } else if (err.code === 'ETIMEDOUT' || err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
-      errorMessage = 'Email service connection failed. Please check SMTP configuration.';
+    } else if (err.code === 'ETIMEDOUT' || err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND' || err.code === 'ESOCKET') {
+      errorMessage = `Email connection failed: ${err.message || 'Network error'}. Check SMTP settings or try Resend API.`;
     } else if (err.code === 'EAUTH' || err.responseCode === 535) {
-      errorMessage = 'Email authentication failed. Please verify SMTP credentials.';
+      errorMessage = `Email authentication failed: ${err.message || 'Invalid credentials'}. Verify SMTP_USER and SMTP_PASS.`;
     } else if (err.message && err.message.includes('SMTP')) {
-      errorMessage = 'Email service error. Please check SMTP configuration.';
+      errorMessage = `Email service error: ${err.message}`;
+    } else {
+      // Show the actual error message in production for debugging
+      errorMessage = `Email send failed: ${err.message || 'Unknown error'}`;
     }
     
-    // In development, include more details
-    const errorDetails = process.env.NODE_ENV === 'development' 
-      ? { details: err.message, code: err.code }
-      : undefined;
-    
+    // Always include error details in response for debugging
     res.status(statusCode).json({ 
       message: errorMessage,
-      ...errorDetails
+      error: err.message,
+      code: err.code,
+      responseCode: err.responseCode,
+      // Include full error in development
+      ...(process.env.NODE_ENV === 'development' ? { stack: err.stack } : {})
     });
   }
 };
