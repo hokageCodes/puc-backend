@@ -18,7 +18,31 @@ const sendEmailViaResend = async ({ to, subject, html, text }) => {
     throw error;
   }
 
-  const fromEmail = process.env.EMAIL_FROM || process.env.RESEND_FROM || 'onboarding@resend.dev';
+  // For Resend, if domain not verified, must use onboarding@resend.dev
+  // Check if EMAIL_FROM contains a custom domain (not resend.dev)
+  let fromEmail = process.env.RESEND_FROM || 'onboarding@resend.dev';
+  
+  // If EMAIL_FROM is set and contains @resend.dev, use it
+  // Otherwise, if it contains a custom domain, extract just the display name
+  if (process.env.EMAIL_FROM) {
+    const emailFrom = process.env.EMAIL_FROM.replace(/^["']|["']$/g, '');
+    // Check if it's a resend.dev email
+    if (emailFrom.includes('@resend.dev')) {
+      fromEmail = emailFrom;
+    } else if (emailFrom.includes('<') && emailFrom.includes('>')) {
+      // Extract display name and use onboarding@resend.dev
+      const match = emailFrom.match(/^(.+?)\s*<.+>$/);
+      if (match) {
+        fromEmail = `${match[1].trim()} <onboarding@resend.dev>`;
+      } else {
+        fromEmail = 'onboarding@resend.dev';
+      }
+    } else {
+      // Just use the default
+      fromEmail = 'onboarding@resend.dev';
+    }
+  }
+  
   const cleanFrom = fromEmail.replace(/^["']|["']$/g, '');
   
   console.log('📧 Sending email via Resend:');
