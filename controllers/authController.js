@@ -242,19 +242,34 @@ export const sendInvite = async (req, res) => {
     console.error('Error stack:', err.stack);
     console.error('Error code:', err.code);
     console.error('Error message:', err.message);
+    console.error('RESEND_API_KEY in env:', !!process.env.RESEND_API_KEY);
     console.error('Full error object:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
     
     // Provide more specific error messages based on error type
     let errorMessage = 'Unable to send activation email';
     let statusCode = 500;
     
+    // Check if Resend was attempted
+    const resendAvailable = !!process.env.RESEND_API_KEY;
+    const usedResend = err.code !== 'ETIMEDOUT' && err.code !== 'ESOCKET' && err.code !== 'ECONNREFUSED' && err.code !== 'SMTP_NOT_CONFIGURED';
+    
     if (err.code === 'SMTP_NOT_CONFIGURED') {
-      errorMessage = 'Email service is not configured. Please configure SMTP settings.';
+      if (resendAvailable) {
+        errorMessage = 'Email service error. Resend API is configured but failed. Check Render logs for details.';
+      } else {
+        errorMessage = 'Email service is not configured. Please add RESEND_API_KEY to Render environment variables (recommended) or configure SMTP settings.';
+      }
       statusCode = 503; // Service Unavailable
     } else if (err.code === 'ETIMEDOUT' || err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND' || err.code === 'ESOCKET') {
-      errorMessage = `Email connection failed: ${err.message || 'Network error'}. Check SMTP settings or try Resend API.`;
+      if (resendAvailable) {
+        errorMessage = `SMTP connection failed (Resend should have been used but wasn't). Check Render logs - RESEND_API_KEY may not be loaded. Verify variable is set correctly and service was redeployed.`;
+      } else {
+        errorMessage = `Email connection failed: ${err.message || 'Network error'}. Add RESEND_API_KEY to Render environment variables (recommended) or check SMTP settings.`;
+      }
     } else if (err.code === 'EAUTH' || err.responseCode === 535) {
-      errorMessage = `Email authentication failed: ${err.message || 'Invalid credentials'}. Verify SMTP_USER and SMTP_PASS.`;
+      errorMessage = `Email authentication failed: ${err.message || 'Invalid credentials'}. Verify SMTP_USER and SMTP_PASS, or use Resend API (RESEND_API_KEY) instead.`;
+    } else if (err.code === 'RESEND_API_ERROR' || err.code === 'RESEND_NOT_CONFIGURED') {
+      errorMessage = `Resend API error: ${err.message}. Check your RESEND_API_KEY in Render environment variables.`;
     } else if (err.message && err.message.includes('SMTP')) {
       errorMessage = `Email service error: ${err.message}`;
     } else {
@@ -268,6 +283,8 @@ export const sendInvite = async (req, res) => {
       error: err.message,
       code: err.code,
       responseCode: err.responseCode,
+      resendAvailable,
+      usedResend,
       // Include full error in development
       ...(process.env.NODE_ENV === 'development' ? { stack: err.stack } : {})
     });

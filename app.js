@@ -19,8 +19,25 @@ import leaveRoutes from './routes/leaveRoutes.js';
 // Load environment variables FIRST
 dotenv.config();
 
+// Debug: Log Email service configuration
+console.log('🔍 Email Service Configuration:', {
+  RESEND_API_KEY: process.env.RESEND_API_KEY ? `✅ Set (${process.env.RESEND_API_KEY.substring(0, 10)}...)` : '❌ MISSING - Will use SMTP',
+  RESEND_FROM: process.env.RESEND_FROM || 'not set',
+  EMAIL_FROM: process.env.EMAIL_FROM || '❌ MISSING',
+  SMTP_HOST: process.env.SMTP_HOST || '❌ MISSING',
+  SMTP_PORT: process.env.SMTP_PORT || '❌ MISSING',
+  NODE_ENV: process.env.NODE_ENV || 'not set',
+});
+
+if (!process.env.RESEND_API_KEY) {
+  console.warn('⚠️ WARNING: RESEND_API_KEY is not set. Emails will use SMTP (less reliable).');
+  console.warn('💡 To use Resend (recommended): Add RESEND_API_KEY to Render environment variables and redeploy.');
+} else {
+  console.log('✅ Resend API configured - emails will use Resend (most reliable!)');
+}
+
 // Debug: Log Cloudinary env vars (remove after testing)
-console.log('🔍 Environment Check:', {
+console.log('🔍 Cloudinary Configuration:', {
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '❌ MISSING',
   CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY ? '✅ Present' : '❌ MISSING',
   CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET ? '✅ Present' : '❌ MISSING',
