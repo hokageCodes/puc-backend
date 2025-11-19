@@ -81,6 +81,10 @@ export const verifyConnection = async () => {
 
 export const sendEmail = async ({ to, subject, html, text }) => {
   // Try Resend first if API key is available (much more reliable)
+  console.log('🔍 Checking email service...');
+  console.log('RESEND_API_KEY present:', !!process.env.RESEND_API_KEY);
+  console.log('RESEND_API_KEY value:', process.env.RESEND_API_KEY ? `${process.env.RESEND_API_KEY.substring(0, 10)}...` : 'NOT SET');
+  
   if (process.env.RESEND_API_KEY) {
     try {
       console.log('📧 Attempting to send via Resend...');
@@ -89,8 +93,11 @@ export const sendEmail = async ({ to, subject, html, text }) => {
       return; // Success!
     } catch (resendError) {
       console.error('❌ Resend failed, falling back to SMTP:', resendError.message);
+      console.error('Resend error details:', resendError);
       // Fall through to SMTP
     }
+  } else {
+    console.log('⚠️ RESEND_API_KEY not found, using SMTP fallback');
   }
 
   // Fallback to SMTP
