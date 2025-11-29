@@ -3,6 +3,12 @@ import LeaveType from '../models/LeaveType.js';
 import LeaveBalance from '../models/LeaveBalance.js';
 import LeaveRequest from '../models/LeaveRequest.js';
 import Staff from '../models/Staff.js';
+import { sendEmail } from '../utils/email.js';
+import {
+  buildLeaveRequestNotificationEmail,
+  buildLeaveApprovedEmail,
+  buildLeaveRejectedEmail,
+} from '../utils/email.js';
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
@@ -52,19 +58,20 @@ const ensureLeaveBalance = async (staffId, leaveType, period) => {
   return balance;
 };
 
+// NOTE: Business change — do not reserve days at request creation. Only
+// adjust (deduct) leave balances when a request is finally approved.
+// Therefore we no longer touch the `pending` field when creating/rejecting requests.
 const adjustBalancePending = async ({ staffId, leaveTypeId, period, amount }) => {
-  await LeaveBalance.updateOne(
-    { staff: staffId, leaveType: leaveTypeId, period },
-    { $inc: { pending: amount } }
-  );
+  // Deprecated: reservation behaviour removed. Keep function for compatibility but no-op.
+  return;
 };
 
 const adjustBalanceOnFinalApproval = async ({ staffId, leaveTypeId, period, duration }) => {
+  // On final approval, increment used days. Do not touch pending (we no longer reserve at request creation).
   await LeaveBalance.updateOne(
     { staff: staffId, leaveType: leaveTypeId, period },
     {
       $inc: {
-        pending: -duration,
         used: duration,
       },
     }
@@ -72,26 +79,47 @@ const adjustBalanceOnFinalApproval = async ({ staffId, leaveTypeId, period, dura
 };
 
 const adjustBalanceOnRejection = async ({ staffId, leaveTypeId, period, duration }) => {
-  await LeaveBalance.updateOne(
-    { staff: staffId, leaveType: leaveTypeId, period },
-    { $inc: { pending: -duration } }
-  );
+  // No-op: since we don't reserve pending days at creation, nothing to revert on rejection.
+  return;
 };
 
+/**
+ * Builds the approval chain for a leave request based on staff's reporting structure.
+ * Chain order: Team Lead → Line Manager → HR (all must be assigned)
+ * 
+ * @param {Object} staffDoc - Staff document with teamLeadId, lineManagerId, and hrId
+ * @returns {Array} Array of approval steps with role, assignee, and status
+ */
 const buildApproverChain = (staffDoc) => {
   const chain = [];
 
-  if (staffDoc.teamLeadId) {
-    chain.push({ role: 'teamLead', assignee: staffDoc.teamLeadId });
+  const resolveId = (val) => {
+    if (!val) return null;
+    // If populated document, return its _id, otherwise return the value (assumed ObjectId/string)
+    if (typeof val === 'object' && val._id) return val._id;
+    return val;
+  };
+
+  // Step 1: Team Lead approval (required)
+  const tl = resolveId(staffDoc.teamLeadId);
+  if (tl) {
+    chain.push({ role: 'teamLead', assignee: tl });
   }
 
-  if (staffDoc.lineManagerId) {
-    chain.push({ role: 'lineManager', assignee: staffDoc.lineManagerId });
+  // Step 2: Line Manager approval (required)
+  const lm = resolveId(staffDoc.lineManagerId);
+  if (lm) {
+    chain.push({ role: 'lineManager', assignee: lm });
   }
 
-  // HR final approval (general queue)
-  chain.push({ role: 'hr' });
+  // Step 3: HR final approval (required - specific HR person assigned to staff)
+  const hr = resolveId(staffDoc.hrId);
+  // Always include an HR approval step so the workflow consistently ends at HR.
+  // If a specific HR assignee is configured, attach them; otherwise leave assignee null
+  // and fallback to notifying all HRs when notifying or listing pending approvals.
+  chain.push({ role: 'hr', assignee: hr || null });
 
+  // Initialize all steps as pending
   return chain.map((step) => ({ ...step, status: 'pending' }));
 };
 
@@ -100,7 +128,9 @@ const deriveStatusFromChain = (chain) => {
   if (!next) {
     return 'approved';
   }
-  return `pending_${next.role}`;
+  // Convert role to lowercase for status (teamLead -> teamlead, lineManager -> linemanager)
+  const roleForStatus = next.role.toLowerCase();
+  return `pending_${roleForStatus}`;
 };
 
 const appendTimeline = (request, event, actorId, note) => {
@@ -131,7 +161,8 @@ export const getMyBalances = async (req, res) => {
         carriedOver: balance.carriedOver,
         used: balance.used,
         pending: balance.pending,
-        remaining: balance.allocated + balance.carriedOver - balance.used - balance.pending,
+        // With reservation removed, remaining is calculated from allocated + carriedOver - used
+        remaining: balance.allocated + balance.carriedOver - balance.used,
       };
     })
   );
@@ -152,7 +183,7 @@ export const createLeaveRequest = async (req, res) => {
       return res.status(404).json({ message: 'Leave type not found.' });
     }
 
-    const staff = await Staff.findById(req.user.id).populate('teamLeadId lineManagerId');
+    const staff = await Staff.findById(req.user.id).populate('teamLeadId lineManagerId hrId');
     if (!staff) {
       return res.status(404).json({ message: 'Staff profile not found.' });
     }
@@ -160,17 +191,10 @@ export const createLeaveRequest = async (req, res) => {
     const durationDays = calculateDurationDays(startDate, endDate, halfDay);
     const period = currentPeriod(new Date(startDate));
 
+    // Ensure balance document exists. We do NOT reserve days at creation anymore.
     await ensureLeaveBalance(staff._id, leaveType, period);
-    await adjustBalancePending({
-      staffId: staff._id,
-      leaveTypeId: leaveType._id,
-      period,
-      amount: durationDays,
-    });
 
-    const approverChain = buildApproverChain(staff).map((step, index) =>
-      index === 0 ? step : step
-    );
+    const approverChain = buildApproverChain(staff);
     const status = deriveStatusFromChain(approverChain);
 
     const leaveRequest = new LeaveRequest({
@@ -190,8 +214,38 @@ export const createLeaveRequest = async (req, res) => {
 
     appendTimeline(leaveRequest, 'submitted', req.user.id, undefined);
 
-    await leaveRequest.save();
-    await leaveRequest.populate([ { path: 'leaveType', select: 'name code' } ]);
+  await leaveRequest.save();
+  await leaveRequest.populate([ { path: 'leaveType', select: 'name code' } ]);
+  console.log(`💾 Leave request saved: id=${leaveRequest._id} staff=${staff._id} duration=${durationDays}`);
+
+    // Send email notification to first approver
+    try {
+      const firstApprover = approverChain.find((step) => step.status === 'pending');
+      if (firstApprover) {
+        // If the step has a specific assignee, notify them. Otherwise, if it's an HR step without an assignee,
+        // notify all users with the 'hr' role so the request reaches HR.
+        if (firstApprover.assignee) {
+          const approver = await Staff.findById(firstApprover.assignee);
+          if (approver && approver.email) {
+            const emailContent = buildLeaveRequestNotificationEmail(approver, staff, leaveRequest, leaveType);
+            await sendEmail({ to: approver.email, subject: emailContent.subject, html: emailContent.html, text: emailContent.text });
+            console.log(`✅ Email sent to ${approver.email} for leave request ${leaveRequest._id}`);
+          }
+        } else if (firstApprover.role === 'hr' && !firstApprover.assignee) {
+          // Notify all HR users
+          const hrUsers = await Staff.find({ roles: 'hr' }).select('firstName lastName email').lean();
+          for (const hrUser of hrUsers) {
+            if (!hrUser?.email) continue;
+            const emailContent = buildLeaveRequestNotificationEmail(hrUser, staff, leaveRequest, leaveType);
+            await sendEmail({ to: hrUser.email, subject: emailContent.subject, html: emailContent.html, text: emailContent.text });
+            console.log(`✅ Email sent to HR (${hrUser.email}) for leave request ${leaveRequest._id}`);
+          }
+        }
+      }
+    } catch (emailError) {
+      console.error('Failed to send leave request notification email:', emailError);
+      // Don't fail the request creation if email fails
+    }
 
     res.status(201).json(leaveRequest);
   } catch (error) {
@@ -203,6 +257,7 @@ export const createLeaveRequest = async (req, res) => {
 export const getMyRequests = async (req, res) => {
   const requests = await LeaveRequest.find({ staff: req.user.id })
     .populate('leaveType', 'name code')
+    .populate({ path: 'approverChain.assignee', select: 'firstName lastName email' })
     .sort({ createdAt: -1 })
     .lean();
   res.json(requests);
@@ -239,12 +294,18 @@ const buildApproverMatchConditions = (user) => {
   }
 
   if (roles.has('hr')) {
+    // Match pending HR steps assigned to this user OR unassigned HR steps (assignee missing/null)
     conditions.push({
       status: 'pending_hr',
       approverChain: {
         $elemMatch: {
           role: 'hr',
           status: 'pending',
+          $or: [
+            { assignee: new mongoose.Types.ObjectId(user.id) },
+            { assignee: { $exists: false } },
+            { assignee: null }
+          ],
         },
       },
     });
@@ -263,6 +324,7 @@ export const getPendingApprovals = async (req, res) => {
   const requests = await LeaveRequest.find({ $or: matchConditions })
     .populate('staff', 'firstName lastName staffCode division')
     .populate('leaveType', 'name code')
+    .populate({ path: 'approverChain.assignee', select: 'firstName lastName email' })
     .sort({ startDate: 1 })
     .lean();
 
@@ -271,8 +333,12 @@ export const getPendingApprovals = async (req, res) => {
 
 const findCurrentPendingStep = (request) => {
   if (!request.status.startsWith('pending_')) return null;
-  const role = request.status.replace('pending_', '');
-  return request.approverChain.find((step) => step.role === role && step.status === 'pending');
+  const statusRole = request.status.replace('pending_', ''); // e.g., 'teamlead', 'linemanager', 'hr'
+  // Map status role back to chain role (teamlead -> teamLead, linemanager -> lineManager, hr -> hr)
+  const chainRole = statusRole === 'teamlead' ? 'teamLead' 
+    : statusRole === 'linemanager' ? 'lineManager' 
+    : statusRole; // 'hr' stays as 'hr'
+  return request.approverChain.find((step) => step.role === chainRole && step.status === 'pending');
 };
 
 const userCanActOnStep = (step, user) => {
@@ -295,6 +361,12 @@ export const approveLeaveRequest = async (req, res) => {
 
   const step = findCurrentPendingStep(leaveRequest);
   if (!userCanActOnStep(step, req.user)) {
+    // Helpful debug log for denied approvals — will show the current step, its assignee and the acting user
+    try {
+      console.warn('[Approve] Denied: step=', JSON.stringify(step), 'user=', JSON.stringify(req.user));
+    } catch (e) {
+      console.warn('[Approve] Denied (could not serialize step/user)');
+    }
     return res.status(403).json({ message: 'You are not authorised to approve this request.' });
   }
 
@@ -306,8 +378,12 @@ export const approveLeaveRequest = async (req, res) => {
   appendTimeline(leaveRequest, 'approved', req.user.id, comment);
 
   const remaining = leaveRequest.approverChain.find((s) => s.status === 'pending');
+  const isFinalApproval = !remaining;
+  
   if (remaining) {
-    leaveRequest.status = `pending_${remaining.role}`;
+    // Convert role to lowercase for status consistency
+    const roleForStatus = remaining.role.toLowerCase();
+    leaveRequest.status = `pending_${roleForStatus}`;
   } else {
     leaveRequest.status = 'approved';
     const period = currentPeriod(leaveRequest.startDate);
@@ -321,6 +397,61 @@ export const approveLeaveRequest = async (req, res) => {
 
   await leaveRequest.save();
   await leaveRequest.populate(['leaveType', 'staff']);
+
+  // Send email notifications
+  try {
+    const approver = await Staff.findById(req.user.id);
+    const staff = await Staff.findById(leaveRequest.staff);
+    
+    if (isFinalApproval) {
+      // Final approval - notify staff
+      if (staff && staff.email) {
+        const emailContent = buildLeaveApprovedEmail(staff, approver, leaveRequest, leaveRequest.leaveType, true);
+        await sendEmail({
+          to: staff.email,
+          subject: emailContent.subject,
+          html: emailContent.html,
+          text: emailContent.text,
+        });
+        console.log(`✅ Final approval email sent to ${staff.email} for leave request ${leaveRequest._id}`);
+      }
+    } else {
+      // Not final - notify next approver and staff
+      if (remaining) {
+        if (remaining.assignee) {
+          const nextApprover = await Staff.findById(remaining.assignee);
+          if (nextApprover && nextApprover.email) {
+            const emailContent = buildLeaveRequestNotificationEmail(nextApprover, staff, leaveRequest, leaveRequest.leaveType);
+            await sendEmail({ to: nextApprover.email, subject: emailContent.subject, html: emailContent.html, text: emailContent.text });
+            console.log(`✅ Approval notification email sent to ${nextApprover.email} for leave request ${leaveRequest._id}`);
+          }
+        } else if (remaining.role === 'hr' && !remaining.assignee) {
+          const hrUsers = await Staff.find({ roles: 'hr' }).select('firstName lastName email').lean();
+          for (const hrUser of hrUsers) {
+            if (!hrUser?.email) continue;
+            const emailContent = buildLeaveRequestNotificationEmail(hrUser, staff, leaveRequest, leaveRequest.leaveType);
+            await sendEmail({ to: hrUser.email, subject: emailContent.subject, html: emailContent.html, text: emailContent.text });
+            console.log(`✅ Approval notification email sent to HR (${hrUser.email}) for leave request ${leaveRequest._id}`);
+          }
+        }
+      }
+      
+      // Also notify staff that their request moved to next stage
+      if (staff && staff.email) {
+        const emailContent = buildLeaveApprovedEmail(staff, approver, leaveRequest, leaveRequest.leaveType, false);
+        await sendEmail({
+          to: staff.email,
+          subject: emailContent.subject,
+          html: emailContent.html,
+          text: emailContent.text,
+        });
+        console.log(`✅ Progress email sent to ${staff.email} for leave request ${leaveRequest._id}`);
+      }
+    }
+  } catch (emailError) {
+    console.error('Failed to send approval notification emails:', emailError);
+    // Don't fail the approval if email fails
+  }
 
   res.json(leaveRequest);
 };
@@ -357,6 +488,26 @@ export const rejectLeaveRequest = async (req, res) => {
 
   await leaveRequest.save();
   await leaveRequest.populate(['leaveType', 'staff']);
+
+  // Send rejection email to staff
+  try {
+    const approver = await Staff.findById(req.user.id);
+    const staff = await Staff.findById(leaveRequest.staff);
+    
+    if (staff && staff.email) {
+      const emailContent = buildLeaveRejectedEmail(staff, approver, leaveRequest, leaveRequest.leaveType, comment);
+      await sendEmail({
+        to: staff.email,
+        subject: emailContent.subject,
+        html: emailContent.html,
+        text: emailContent.text,
+      });
+      console.log(`✅ Rejection email sent to ${staff.email} for leave request ${leaveRequest._id}`);
+    }
+  } catch (emailError) {
+    console.error('Failed to send rejection notification email:', emailError);
+    // Don't fail the rejection if email fails
+  }
 
   res.json(leaveRequest);
 };
@@ -402,11 +553,22 @@ export const getCalendarData = async (req, res) => {
         teamConditions.push({ lineManagerId: userId });
       }
 
-      // HR: get all approved/pending requests (they see everything)
+      // HR: get requests where this HR person is assigned OR all approved requests
       if (userRoles.has('hr')) {
         const teamRequests = await LeaveRequest.find({
           staff: { $ne: userId }, // Exclude own requests (already added)
-          status: { $in: ['approved', 'pending_teamlead', 'pending_linemanager', 'pending_hr'] },
+          $or: [
+            { status: 'approved' }, // Show all approved requests
+            {
+              status: { $in: ['pending_teamlead', 'pending_linemanager', 'pending_hr'] },
+              approverChain: {
+                $elemMatch: {
+                  role: 'hr',
+                  assignee: userId,
+                },
+              },
+            },
+          ],
         })
           .populate('leaveType', 'name code')
           .populate('staff', 'firstName lastName')

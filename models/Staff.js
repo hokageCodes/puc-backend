@@ -35,6 +35,7 @@ const StaffSchema = new mongoose.Schema(
 
     teamLeadId: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff' },
     lineManagerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff' },
+    hrId: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff' },
 
     isVisible: { type: Boolean, default: true },
 

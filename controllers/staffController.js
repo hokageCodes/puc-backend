@@ -126,7 +126,8 @@ export const getAllStaff = async (req, res) => {
       .populate('team', 'name')
       .populate('practiceAreas', 'name')
       .populate('teamLeadId', 'firstName lastName staffCode')
-      .populate('lineManagerId', 'firstName lastName staffCode');
+      .populate('lineManagerId', 'firstName lastName staffCode')
+      .populate('hrId', 'firstName lastName staffCode');
 
     await Promise.all(staffList.map(ensureStaffCode));
 
@@ -148,7 +149,8 @@ export const getStaffById = async (req, res) => {
       .populate('team', 'name')
       .populate('practiceAreas', 'name')
       .populate('teamLeadId', 'firstName lastName staffCode')
-      .populate('lineManagerId', 'firstName lastName staffCode'); // ✅ Ensure this is included
+      .populate('lineManagerId', 'firstName lastName staffCode')
+      .populate('hrId', 'firstName lastName staffCode'); // ✅ Ensure this is included
 
     if (!staff) return res.status(404).json({ error: 'Staff not found' });
 
@@ -178,6 +180,7 @@ export const createStaff = async (req, res) => {
       division,
       teamLeadId,
       lineManagerId,
+      hrId,
       leaveEnabled,
       hireDate,
       confirmationDate,
@@ -197,6 +200,7 @@ export const createStaff = async (req, res) => {
     const normalizedLeaveEnabled = parseBoolean(leaveEnabled, true);
     const normalizedTeamLeadId = normalizeObjectIdField(teamLeadId);
     const normalizedLineManagerId = normalizeObjectIdField(lineManagerId);
+    const normalizedHrId = normalizeObjectIdField(hrId);
     const normalizedHireDate = normalizeDate(hireDate);
     const normalizedConfirmationDate = normalizeDate(confirmationDate);
 
@@ -222,6 +226,7 @@ export const createStaff = async (req, res) => {
       ...(practiceAreas ? { practiceAreas } : {}),
       ...(normalizedTeamLeadId ? { teamLeadId: normalizedTeamLeadId } : {}),
       ...(normalizedLineManagerId ? { lineManagerId: normalizedLineManagerId } : {}),
+      ...(normalizedHrId ? { hrId: normalizedHrId } : {}),
       profilePhoto: profilePhotoUrl,
       isVisible: visibilityValue,
       staffCode: await getNextStaffCode(),
@@ -234,7 +239,8 @@ export const createStaff = async (req, res) => {
       .populate('team', 'name')
       .populate('practiceAreas', 'name')
       .populate('teamLeadId', 'firstName lastName staffCode')
-      .populate('lineManagerId', 'firstName lastName staffCode');
+      .populate('lineManagerId', 'firstName lastName staffCode')
+      .populate('hrId', 'firstName lastName staffCode');
 
     res.status(201).json(populated);
   } catch (err) {
@@ -266,6 +272,7 @@ export const updateStaff = async (req, res) => {
       division,
       teamLeadId,
       lineManagerId,
+      hrId,
       leaveEnabled,
       hireDate,
       confirmationDate,
@@ -336,6 +343,15 @@ export const updateStaff = async (req, res) => {
       }
     }
 
+    const normalizedHrId = normalizeObjectIdField(hrId);
+    if (hrId !== undefined) {
+      if (normalizedHrId) {
+        updateData.hrId = normalizedHrId;
+      } else {
+        unsetData.hrId = '';
+      }
+    }
+
     if (department === '') {
       unsetData.department = '';
     } else if (department) {
@@ -400,11 +416,13 @@ export const updateStaff = async (req, res) => {
     }
 
     const populatedDoc = await Staff.findById(updated._id)
+      .populate('hrId', 'firstName lastName staffCode')
       .populate('department', 'name')
       .populate('team', 'name')
       .populate('practiceAreas', 'name')
       .populate('teamLeadId', 'firstName lastName staffCode')
-      .populate('lineManagerId', 'firstName lastName staffCode');
+      .populate('lineManagerId', 'firstName lastName staffCode')
+      .populate('hrId', 'firstName lastName staffCode');
 
     const ensuredDoc = await ensureStaffCode(populatedDoc);
 

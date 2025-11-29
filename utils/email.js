@@ -85,6 +85,14 @@ export const sendEmail = async ({ to, subject, html, text }) => {
   console.log('RESEND_API_KEY present:', !!process.env.RESEND_API_KEY);
   console.log('RESEND_API_KEY value:', process.env.RESEND_API_KEY ? `${process.env.RESEND_API_KEY.substring(0, 10)}...` : 'NOT SET');
   
+  // If explicitly configured to only log emails (dev), do that and exit early
+  const LOG_ONLY = (process.env.EMAIL_LOG_ONLY || '').toLowerCase() === 'true';
+  if (LOG_ONLY) {
+    console.log('📧 EMAIL_LOG_ONLY enabled — logging email instead of sending');
+    console.log('📧 Email payload:', { from: process.env.EMAIL_FROM || 'no-reply', to, subject, text, htmlSnippet: (html || '').slice(0, 200) });
+    return;
+  }
+
   if (process.env.RESEND_API_KEY) {
     try {
       console.log('📧 Attempting to send via Resend...');
@@ -92,9 +100,54 @@ export const sendEmail = async ({ to, subject, html, text }) => {
       await sendEmailViaResend({ to, subject, html, text });
       return; // Success!
     } catch (resendError) {
-      console.error('❌ Resend failed, falling back to SMTP:', resendError.message);
-      console.error('Resend error details:', resendError);
-      // Fall through to SMTP
+      // Inspect resendError response to detect test-mode / unverified domain errors
+      console.error('❌ Resend failed:', resendError.message || resendError);
+      console.error('Resend error details:', resendError.response || resendError);
+
+      const resendBody = resendError && resendError.response ? resendError.response : null;
+      const isResendTestMode =
+        resendBody && (
+          (typeof resendBody.message === 'string' && resendBody.message.toLowerCase().includes('testing')) ||
+          (typeof resendBody.error === 'string' && resendBody.error.toLowerCase().includes('testing')) ||
+          (resendError.statusCode === 403)
+        );
+
+      if (isResendTestMode && (process.env.NODE_ENV || 'development') !== 'production') {
+        console.warn('⚠️ Resend appears to be in test/unverified mode (or returned 403). Falling back to an Ethereal test account for development.');
+        try {
+          // Lazy-create a test account and send via Ethereal so devs receive a working preview URL
+          const testInfo = await (async function sendViaEthereal() {
+            console.log('📧 Creating ethereal test account...');
+            const testAccount = await nodemailer.createTestAccount();
+            const ethTransporter = nodemailer.createTransport({
+              host: testAccount.smtp.host,
+              port: testAccount.smtp.port,
+              secure: testAccount.smtp.secure,
+              auth: { user: testAccount.user, pass: testAccount.pass },
+            });
+
+            const info = await ethTransporter.sendMail({
+              from: process.env.EMAIL_FROM || `"PUC Leave" <${testAccount.user}>`,
+              to,
+              subject,
+              text,
+              html,
+            });
+
+            const preview = nodemailer.getTestMessageUrl(info);
+            console.log('✅ Ethereal email sent. Preview URL:', preview || 'NOT_AVAILABLE');
+            return { info, preview };
+          })();
+
+          return testInfo;
+        } catch (ethErr) {
+          console.error('❌ Ethereal fallback failed:', ethErr && ethErr.message ? ethErr.message : ethErr);
+          // Fall through to SMTP attempt below
+        }
+      }
+
+      // Fall through to SMTP for other kinds of errors
+      console.log('❌ Resend failed, falling back to SMTP');
     }
   } else {
     console.log('⚠️ RESEND_API_KEY not found, using SMTP fallback');
@@ -210,4 +263,124 @@ export const buildPasswordResetEmail = (user, token) => {
       <p>— Paul Udo &amp; Co</p>
     `,
   };
+};
+
+// Leave request notification emails
+export const buildLeaveRequestNotificationEmail = (approver, staff, leaveRequest, leaveType) => {
+  const approverName = approver.firstName || approver.email;
+  const staffName = `${staff.firstName} ${staff.lastName}`;
+  const dates = formatLeaveDates(leaveRequest.startDate, leaveRequest.endDate);
+  const approvalUrl = baseUrl('/leave/approvals');
+  
+  return {
+    subject: `Leave Request from ${staffName} - Action Required`,
+    text: `Hello ${approverName},\n\n${staffName} has submitted a leave request that requires your approval.\n\nDetails:\n- Leave Type: ${leaveType.name}\n- Dates: ${dates}\n- Duration: ${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}\n- Reason: ${leaveRequest.reason}\n\nPlease review and approve this request:\n${approvalUrl}\n\n— Paul Udo &amp; Co Leave Portal`,
+    html: `
+      <p>Hello ${approverName},</p>
+      <p><strong>${staffName}</strong> has submitted a leave request that requires your approval.</p>
+      <div style="background: #f3f4f6; padding: 16px; border-radius: 8px; margin: 16px 0;">
+        <p><strong>Leave Type:</strong> ${leaveType.name}</p>
+        <p><strong>Dates:</strong> ${dates}</p>
+        <p><strong>Duration:</strong> ${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}</p>
+        <p><strong>Reason:</strong> ${leaveRequest.reason}</p>
+        ${leaveRequest.coveragePlan ? `<p><strong>Coverage Plan:</strong> ${leaveRequest.coveragePlan}</p>` : ''}
+        ${leaveRequest.handoverNotes ? `<p><strong>Handover Notes:</strong> ${leaveRequest.handoverNotes}</p>` : ''}
+      </div>
+      <p style="margin: 20px 0;">
+        <a href="${approvalUrl}" style="background: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+          Review & Approve Request
+        </a>
+      </p>
+      <p style="color: #6b7280; font-size: 14px; margin-top: 20px;">— Paul Udo &amp; Co Leave Portal</p>
+    `,
+  };
+};
+
+export const buildLeaveApprovedEmail = (staff, approver, leaveRequest, leaveType, isFinal = false) => {
+  const staffName = `${staff.firstName} ${staff.lastName}`;
+  const approverName = approver ? `${approver.firstName} ${approver.lastName}` : 'HR';
+  const dates = formatLeaveDates(leaveRequest.startDate, leaveRequest.endDate);
+  
+  if (isFinal) {
+    return {
+      subject: `Your Leave Request Has Been Approved`,
+      text: `Hello ${staffName},\n\nGreat news! Your leave request has been fully approved.\n\nDetails:\n- Leave Type: ${leaveType.name}\n- Dates: ${dates}\n- Duration: ${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}\n- Approved by: ${approverName}\n\nYou can view your leave requests at: ${baseUrl('/leave/requests')}\n\n— Paul Udo &amp; Co Leave Portal`,
+      html: `
+        <p>Hello ${staffName},</p>
+        <p><strong>Great news! Your leave request has been fully approved.</strong></p>
+        <div style="background: #d1fae5; padding: 16px; border-radius: 8px; margin: 16px 0; border-left: 4px solid #10b981;">
+          <p><strong>Leave Type:</strong> ${leaveType.name}</p>
+          <p><strong>Dates:</strong> ${dates}</p>
+          <p><strong>Duration:</strong> ${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}</p>
+          <p><strong>Approved by:</strong> ${approverName}</p>
+        </div>
+        <p style="margin: 20px 0;">
+          <a href="${baseUrl('/leave/requests')}" style="background: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            View My Requests
+          </a>
+        </p>
+        <p style="color: #6b7280; font-size: 14px; margin-top: 20px;">— Paul Udo &amp; Co Leave Portal</p>
+      `,
+    };
+  } else {
+    // Not final approval - notify next approver
+    return {
+      subject: `Leave Request Approved - Forwarded for Final Review`,
+      text: `Hello ${staffName},\n\nYour leave request has been approved by ${approverName} and is now pending final approval.\n\nDetails:\n- Leave Type: ${leaveType.name}\n- Dates: ${dates}\n- Duration: ${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}\n\nYou can track the status at: ${baseUrl('/leave/requests')}\n\n— Paul Udo &amp; Co Leave Portal`,
+      html: `
+        <p>Hello ${staffName},</p>
+        <p>Your leave request has been <strong>approved by ${approverName}</strong> and is now pending final approval.</p>
+        <div style="background: #fef3c7; padding: 16px; border-radius: 8px; margin: 16px 0; border-left: 4px solid #f59e0b;">
+          <p><strong>Leave Type:</strong> ${leaveType.name}</p>
+          <p><strong>Dates:</strong> ${dates}</p>
+          <p><strong>Duration:</strong> ${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}</p>
+        </div>
+        <p style="margin: 20px 0;">
+          <a href="${baseUrl('/leave/requests')}" style="background: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            Track Request Status
+          </a>
+        </p>
+        <p style="color: #6b7280; font-size: 14px; margin-top: 20px;">— Paul Udo &amp; Co Leave Portal</p>
+      `,
+    };
+  }
+};
+
+export const buildLeaveRejectedEmail = (staff, approver, leaveRequest, leaveType, comment) => {
+  const staffName = `${staff.firstName} ${staff.lastName}`;
+  const approverName = approver ? `${approver.firstName} ${approver.lastName}` : 'HR';
+  const dates = formatLeaveDates(leaveRequest.startDate, leaveRequest.endDate);
+  
+  return {
+    subject: `Your Leave Request Has Been Declined`,
+    text: `Hello ${staffName},\n\nUnfortunately, your leave request has been declined by ${approverName}.\n\nDetails:\n- Leave Type: ${leaveType.name}\n- Dates: ${dates}\n- Duration: ${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}\n${comment ? `- Reason: ${comment}\n` : ''}\nYou can view your leave requests at: ${baseUrl('/leave/requests')}\n\n— Paul Udo &amp; Co Leave Portal`,
+    html: `
+      <p>Hello ${staffName},</p>
+      <p>Unfortunately, your leave request has been <strong>declined by ${approverName}</strong>.</p>
+      <div style="background: #fee2e2; padding: 16px; border-radius: 8px; margin: 16px 0; border-left: 4px solid #ef4444;">
+        <p><strong>Leave Type:</strong> ${leaveType.name}</p>
+        <p><strong>Dates:</strong> ${dates}</p>
+        <p><strong>Duration:</strong> ${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}</p>
+        ${comment ? `<p><strong>Reason:</strong> ${comment}</p>` : ''}
+      </div>
+      <p style="margin: 20px 0;">
+        <a href="${baseUrl('/leave/requests')}" style="background: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+          View My Requests
+        </a>
+      </p>
+      <p style="color: #6b7280; font-size: 14px; margin-top: 20px;">— Paul Udo &amp; Co Leave Portal</p>
+    `,
+  };
+};
+
+const formatLeaveDates = (startDate, endDate) => {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const startStr = start.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+  const endStr = end.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+  
+  if (start.getTime() === end.getTime()) {
+    return startStr;
+  }
+  return `${startStr} – ${endStr}`;
 };

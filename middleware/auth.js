@@ -66,7 +66,8 @@ export const requireAuth = ({ scope = 'leave' } = {}) => async (req, res, next) 
       const roles = Array.isArray(staff.roles) && staff.roles.length ? staff.roles : [DEFAULT_ROLE];
 
       req.user = {
-        id: staff._id,
+        // Ensure user id is a string to avoid ObjectId vs string equality issues
+        id: staff._id.toString(),
         email: staff.email,
         roles,
         division: staff.division,
@@ -82,7 +83,7 @@ export const requireAuth = ({ scope = 'leave' } = {}) => async (req, res, next) 
       }
 
       req.user = {
-        id: legacyAdmin._id,
+        id: legacyAdmin._id.toString(),
         email: legacyAdmin.email,
         roles: [ROLES.ADMIN, ROLES.CMS],
         division: 'legal',

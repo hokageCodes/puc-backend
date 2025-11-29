@@ -112,15 +112,31 @@ const createPasswordToken = async (staff) => {
   return rawToken;
 };
 
-const respondWithTokens = (res, staff, scope) => {
+const respondWithTokens = async (res, staff, scope) => {
   const accessToken = createAccessToken(staff, scope);
   const refreshToken = createRefreshToken(staff, scope);
   setRefreshCookie(res, refreshToken, scope);
 
+  // Resolve reporting relationships so the leave frontend can display approver names
+  const teamLead = staff.teamLeadId ? await Staff.findById(staff.teamLeadId).select('firstName lastName email') : null;
+  const lineManager = staff.lineManagerId ? await Staff.findById(staff.lineManagerId).select('firstName lastName email') : null;
+  const hr = staff.hrId ? await Staff.findById(staff.hrId).select('firstName lastName email') : null;
+
+  const userProfile = {
+    ...pickUserProfile(staff),
+    teamLead: teamLead
+      ? { id: teamLead._id, firstName: teamLead.firstName, lastName: teamLead.lastName, email: teamLead.email }
+      : null,
+    lineManager: lineManager
+      ? { id: lineManager._id, firstName: lineManager.firstName, lastName: lineManager.lastName, email: lineManager.email }
+      : null,
+    hr: hr ? { id: hr._id, firstName: hr.firstName, lastName: hr.lastName, email: hr.email } : null,
+  };
+
   return res.json({
     accessToken,
     scope,
-    user: pickUserProfile(staff),
+    user: userProfile,
   });
 };
 
