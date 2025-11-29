@@ -331,6 +331,57 @@ export const getPendingApprovals = async (req, res) => {
   res.json(requests);
 };
 
+export const getMyApprovals = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Find leave requests where the timeline contains an approval/rejection by this user
+    const requests = await LeaveRequest.find({
+      timeline: {
+        $elemMatch: {
+          actor: userId,
+          event: { $in: ['approved', 'rejected'] },
+        },
+      },
+    })
+      .populate('leaveType', 'name code')
+      .populate('staff', 'firstName lastName staffCode')
+      .lean();
+
+    // Flatten actions: for each request, keep only timeline entries by this user
+    const actions = [];
+    for (const reqDoc of requests) {
+      const staffName = `${reqDoc.staff?.firstName || ''} ${reqDoc.staff?.lastName || ''}`.trim();
+      const relevant = (reqDoc.timeline || []).filter((t) =>
+        String(t.actor) === String(userId) && ['approved', 'rejected'].includes(t.event)
+      );
+
+      for (const t of relevant) {
+        actions.push({
+          requestId: reqDoc._id,
+          event: t.event,
+          timestamp: t.timestamp,
+          note: t.note || null,
+          leaveType: reqDoc.leaveType?.name || null,
+          staffName,
+          status: reqDoc.status,
+          startDate: reqDoc.startDate,
+          endDate: reqDoc.endDate,
+          durationDays: reqDoc.durationDays,
+        });
+      }
+    }
+
+    // Sort by most recent action first
+    actions.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    res.json(actions);
+  } catch (error) {
+    console.error('getMyApprovals error:', error);
+    res.status(500).json({ message: 'Failed to load approvals history.' });
+  }
+};
+
 const findCurrentPendingStep = (request) => {
   if (!request.status.startsWith('pending_')) return null;
   const statusRole = request.status.replace('pending_', ''); // e.g., 'teamlead', 'linemanager', 'hr'

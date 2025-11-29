@@ -5,6 +5,7 @@ import {
   createLeaveRequest,
   getMyRequests,
   getPendingApprovals,
+  getMyApprovals,
   approveLeaveRequest,
   rejectLeaveRequest,
   getCalendarData,
@@ -24,6 +25,7 @@ router.post('/requests', createLeaveRequest);
 router.get('/requests', getMyRequests);
 
 router.get('/approvals', getPendingApprovals);
+  router.get('/approvals/history', getMyApprovals);
 router.post('/requests/:id/approve', requireRoles('teamLead', 'lineManager', 'hr'), approveLeaveRequest);
 router.post('/requests/:id/reject', requireRoles('teamLead', 'lineManager', 'hr'), rejectLeaveRequest);
 

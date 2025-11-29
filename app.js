@@ -160,6 +160,10 @@ app.use((req, res, next) => {
 app.use('/uploads', express.static('uploads'));
 
 // API routes
+// Public staff endpoint (no auth) - used by public site to render team members
+import { getPublicStaff } from './controllers/staffController.js';
+app.get('/api/public/staff', getPublicStaff);
+
 app.use('/api/staff', staffRoutes);
 app.use('/api/leave', leaveRoutes);
 app.use('/api/auth', authRoutes);

@@ -137,6 +137,24 @@ export const getAllStaff = async (req, res) => {
   }
 };
 
+// Public endpoint: GET /api/public/staff
+export const getPublicStaff = async (req, res) => {
+  try {
+    // Only return staff marked visible (or omitted isVisible field)
+    const staffList = await Staff.find({ isVisible: { $ne: false } })
+      .sort({ staffCode: 1, createdAt: 1 })
+      .select('firstName lastName position profilePhoto bio department team staffCode')
+      .populate('department', 'name')
+      .populate('team', 'name')
+      .lean();
+
+    res.json(staffList);
+  } catch (err) {
+    console.error('getPublicStaff error:', err);
+    res.status(500).json({ error: 'Failed to fetch public staff list', details: err.message });
+  }
+};
+
 
 // GET /api/staff/:id
 export const getStaffById = async (req, res) => {
