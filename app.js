@@ -31,7 +31,7 @@ console.log('🔍 Email Service Configuration:', {
 
 if (!process.env.RESEND_API_KEY) {
   console.warn('⚠️ WARNING: RESEND_API_KEY is not set. Emails will use SMTP (less reliable).');
-  console.warn('💡 To use Resend (recommended): Add RESEND_API_KEY to Render environment variables and redeploy.');
+  console.warn('💡 To use Resend (recommended): Add RESEND_API_KEY to environment variables and redeploy.');
 } else {
   console.log('✅ Resend API configured - emails will use Resend (most reliable!)');
 }
@@ -57,8 +57,11 @@ if (!process.env.CLOUDINARY_API_KEY) {
   console.log('✅ Cloudinary configured successfully');
 }
 
-// Connect to MongoDB
-connectDB();
+// Connect to MongoDB (connection is cached for serverless environments)
+// This will be called on first request in serverless, but connection is reused
+connectDB().catch((err) => {
+  console.error('Failed to connect to MongoDB:', err);
+});
 
 const app = express();
 
@@ -79,7 +82,11 @@ const corsOptions = {
       'https://localhost:3000',
       'https://localhost:3001',
       'https://localhost:3002',
-      process.env.CLIENT_URL
+      process.env.CLIENT_URL,
+      // Vercel URLs
+      process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null,
+      process.env.VERCEL_BRANCH_URL ? `https://${process.env.VERCEL_BRANCH_URL}` : null,
+      process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null
     ].filter(Boolean);
 
     const isLocalhost = origin && (
@@ -209,7 +216,7 @@ app.get('/api/diagnostic/smtp', async (req, res) => {
     timestamp: new Date().toISOString(),
     note: process.env.RESEND_API_KEY 
       ? 'Resend is configured - emails will use Resend API (most reliable!)'
-      : 'Check Render dashboard Environment variables section if any are missing. Consider Resend API for better reliability.'
+      : 'Check environment variables section if any are missing. Consider Resend API for better reliability.'
   });
 });
 
@@ -254,10 +261,13 @@ app.use((err, req, res, next) => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
-
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-});
+// Only start server if not running on Vercel (serverless)
+// Vercel will handle the serverless function invocation
+if (process.env.VERCEL !== '1' && !process.env.VERCEL_ENV) {
+  const PORT = process.env.PORT || 5000;
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+  });
+}
 
 export default app;
