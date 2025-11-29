@@ -360,3 +360,110 @@ export const rejectLeaveRequest = async (req, res) => {
 
   res.json(leaveRequest);
 };
+
+export const getCalendarData = async (req, res) => {
+  const userId = req.user.id;
+  const userRoles = new Set(req.user.roles || []);
+  const isApprover = userRoles.has('teamLead') || userRoles.has('lineManager') || userRoles.has('hr');
+
+  // Always get user's own requests
+  const myRequests = await LeaveRequest.find({ staff: userId })
+    .populate('leaveType', 'name code')
+    .populate('staff', 'firstName lastName')
+    .sort({ startDate: 1 })
+    .lean();
+
+  const events = myRequests
+    .filter((req) => req.leaveType) // Filter out requests without leaveType
+    .map((req) => ({
+      id: req._id.toString(),
+      title: `Your ${req.leaveType?.name || 'Leave'}`,
+      startDate: req.startDate,
+      endDate: req.endDate,
+      type: 'own',
+      status: req.status,
+      leaveType: req.leaveType?.name || 'Leave',
+      colour: 'bg-emerald-100 text-emerald-700',
+    }));
+
+  // If user is an approver, get team requests
+  if (isApprover) {
+    const staff = await Staff.findById(userId);
+    if (staff) {
+      const teamConditions = [];
+
+      // Team Lead: get requests from staff where this user is teamLeadId
+      if (userRoles.has('teamLead')) {
+        teamConditions.push({ teamLeadId: userId });
+      }
+
+      // Line Manager: get requests from staff where this user is lineManagerId
+      if (userRoles.has('lineManager')) {
+        teamConditions.push({ lineManagerId: userId });
+      }
+
+      // HR: get all approved/pending requests (they see everything)
+      if (userRoles.has('hr')) {
+        const teamRequests = await LeaveRequest.find({
+          staff: { $ne: userId }, // Exclude own requests (already added)
+          status: { $in: ['approved', 'pending_teamlead', 'pending_linemanager', 'pending_hr'] },
+        })
+          .populate('leaveType', 'name code')
+          .populate('staff', 'firstName lastName')
+          .sort({ startDate: 1 })
+          .lean();
+
+        teamRequests
+          .filter((req) => req.leaveType && req.staff) // Filter out incomplete data
+          .forEach((req) => {
+            const staffName = `${req.staff?.firstName || ''} ${req.staff?.lastName || ''}`.trim();
+            events.push({
+              id: req._id.toString(),
+              title: `${staffName} • ${req.leaveType?.name || 'Leave'}`,
+              startDate: req.startDate,
+              endDate: req.endDate,
+              type: 'team',
+              status: req.status,
+              leaveType: req.leaveType?.name || 'Leave',
+              staffName,
+              colour: 'bg-blue-100 text-blue-700',
+            });
+          });
+      } else if (teamConditions.length > 0) {
+        // For team leads and line managers, get requests from their direct reports
+        const teamStaff = await Staff.find({ $or: teamConditions }).select('_id').lean();
+        const teamStaffIds = teamStaff.map((s) => s._id);
+
+        if (teamStaffIds.length > 0) {
+          const teamRequests = await LeaveRequest.find({
+            staff: { $in: teamStaffIds },
+            status: { $in: ['approved', 'pending_teamlead', 'pending_linemanager', 'pending_hr'] },
+          })
+            .populate('leaveType', 'name code')
+            .populate('staff', 'firstName lastName')
+            .sort({ startDate: 1 })
+            .lean();
+
+          teamRequests
+            .filter((req) => req.leaveType && req.staff) // Filter out incomplete data
+            .forEach((req) => {
+              const staffName = `${req.staff?.firstName || ''} ${req.staff?.lastName || ''}`.trim();
+              events.push({
+                id: req._id.toString(),
+                title: `${staffName} • ${req.leaveType?.name || 'Leave'}`,
+                startDate: req.startDate,
+                endDate: req.endDate,
+                type: 'team',
+                status: req.status,
+                leaveType: req.leaveType?.name || 'Leave',
+                staffName,
+                colour: 'bg-blue-100 text-blue-700',
+              });
+            });
+        }
+      }
+    }
+  }
+
+  res.json({ events });
+};

@@ -7,6 +7,7 @@ import {
   getPendingApprovals,
   approveLeaveRequest,
   rejectLeaveRequest,
+  getCalendarData,
 } from '../controllers/leaveController.js';
 import { requireAuth, ensureLeaveEnrolled, requireRoles } from '../middleware/auth.js';
 
@@ -17,6 +18,7 @@ router.use(ensureLeaveEnrolled);
 
 router.get('/types', listLeaveTypes);
 router.get('/balances', getMyBalances);
+router.get('/calendar', getCalendarData);
 
 router.post('/requests', createLeaveRequest);
 router.get('/requests', getMyRequests);
