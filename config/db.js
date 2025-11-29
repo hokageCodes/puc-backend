@@ -16,7 +16,7 @@ const connectDB = async () => {
   // If connection is in progress, wait for it
   if (!cached.promise) {
     const opts = {
-      bufferCommands: false,
+      bufferCommands: true, // Changed to true for serverless - allows queuing commands while connecting
       dbName: 'PUC',
     };
 

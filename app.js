@@ -124,6 +124,26 @@ app.use(cors(corsOptions));
 // JSON parsing middleware
 app.use(express.json());
 
+// Database connection middleware - ensures DB is connected before handling requests
+// Critical for serverless environments where connection might not be ready on first request
+app.use(async (req, res, next) => {
+  try {
+    // Ensure MongoDB is connected before processing request
+    const mongoose = await import('mongoose');
+    if (mongoose.default.connection.readyState !== 1) {
+      // Connection not ready, wait for it
+      await connectDB();
+    }
+    next();
+  } catch (error) {
+    console.error('Database connection error in middleware:', error);
+    res.status(503).json({ 
+      error: 'Service temporarily unavailable', 
+      message: 'Database connection failed. Please try again in a moment.' 
+    });
+  }
+});
+
 // Request logging
 app.use((req, res, next) => {
   console.log(`${req.method} ${req.path}`, {
