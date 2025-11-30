@@ -11,7 +11,7 @@ MONGODB_URI=... JWT_ACCESS_SECRET=... RESEND_API_KEY=... EMAIL_FROM=...
 ```
 
 ## ✅ CORRECT (Do This):
-
+    
 In Render Dashboard → Your Web Service → Environment, add each variable **separately**:
 
 ```

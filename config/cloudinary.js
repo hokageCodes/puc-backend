@@ -1,5 +1,17 @@
 import { v2 as cloudinary } from 'cloudinary';
-import { CloudinaryStorage } from 'multer-storage-cloudinary';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+
+// Try different import methods for multer-storage-cloudinary
+let CloudinaryStorage;
+try {
+  // Method 1: Named export
+  const storageModule = require('multer-storage-cloudinary');
+  CloudinaryStorage = storageModule.CloudinaryStorage || storageModule;
+} catch (err) {
+  console.error('Failed to load multer-storage-cloudinary:', err.message);
+}
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -10,7 +22,7 @@ cloudinary.config({
 const storage = new CloudinaryStorage({
   cloudinary,
   params: {
-    folder: 'puc-staff-photos', // optional Cloudinary folder name
+    folder: 'puc-staff-photos',
     allowed_formats: ['jpg', 'jpeg', 'png'],
     transformation: [{ width: 500, height: 500, crop: 'limit' }],
   },
