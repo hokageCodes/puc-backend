@@ -2,7 +2,7 @@
 import Blog from '../models/Blog.js';
 
 export const createBlog = async (req, res) => {
-  const { title, slug, excerpt, coverImage, tags, content, status, scheduledAt } = req.body;
+  const { title, slug, excerpt, author, coverImage, tags, content, status, scheduledAt } = req.body;
   
   // Use uploaded file or provided URL
   const imageUrl = req.file?.path || coverImage;
@@ -29,6 +29,7 @@ export const createBlog = async (req, res) => {
       title,
       slug,
       excerpt,
+      author,
       coverImage: imageUrl,
       tags: parsedTags || [],
       content,
@@ -53,7 +54,7 @@ export const createBlog = async (req, res) => {
 
 export const updateBlog = async (req, res) => {
   const { id } = req.params;
-  const { title, slug, excerpt, coverImage, tags, content, status, scheduledAt, featured } = req.body;
+  const { title, slug, excerpt, author, coverImage, tags, content, status, scheduledAt, featured } = req.body;
   
   // Use uploaded file if provided, otherwise use existing or provided URL
   const imageUrl = req.file?.path || coverImage;
@@ -82,6 +83,7 @@ export const updateBlog = async (req, res) => {
       ...(title && { title }),
       ...(slug && { slug }),
       ...(excerpt !== undefined && { excerpt }),
+      ...(author !== undefined && { author }),
       ...(imageUrl && { coverImage: imageUrl }),
       ...(tags && { tags: parsedTags || [] }),
       ...(content && { content }),
