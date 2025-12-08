@@ -12,7 +12,13 @@ import {
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
-const currentPeriod = (date = new Date()) => date.getUTCFullYear();
+const currentPeriod = (date = new Date()) => {
+  const year = date.getUTCFullYear();
+  if (!year || isNaN(year)) {
+    return new Date().getUTCFullYear();
+  }
+  return year;
+};
 
 const calculateDurationDays = (startDate, endDate, halfDay) => {
   const start = new Date(startDate);
@@ -37,37 +43,85 @@ const calculateDurationDays = (startDate, endDate, halfDay) => {
 };
 
 const ensureLeaveBalance = async (staffId, leaveType, period) => {
+  if (!period || isNaN(period) || period === null) {
+    throw new Error('Invalid period value. Cannot create leave balance.');
+  }
+
   const defaultAllocation =
     typeof leaveType.defaultDays === 'number'
       ? leaveType.defaultDays
       : leaveType.defaultAnnualAllocation ?? 0;
 
-  const balance = await LeaveBalance.findOneAndUpdate(
-    { staff: staffId, leaveType: leaveType._id, period },
-    {
-      $setOnInsert: {
-        allocated: defaultAllocation,
-        carriedOver: 0,
-        used: 0,
-        pending: 0,
+  try {
+    const balance = await LeaveBalance.findOneAndUpdate(
+      { staff: staffId, leaveType: leaveType._id, period },
+      {
+        $setOnInsert: {
+          allocated: defaultAllocation,
+          carriedOver: 0,
+          used: 0,
+          pending: 0,
+        },
       },
-    },
-    { new: true, upsert: true }
-  );
+      { new: true, upsert: true }
+    );
 
-  return balance;
+    return balance;
+  } catch (error) {
+    if (error.code === 11000 || error.code === 11001) {
+      let existingBalance = await LeaveBalance.findOne({
+        staff: staffId,
+        leaveType: leaveType._id,
+        period,
+      });
+      
+      if (!existingBalance) {
+        existingBalance = await LeaveBalance.findOne({
+          staff: staffId,
+          leaveType: leaveType._id,
+          $or: [
+            { period },
+            { year: period },
+          ],
+        });
+      }
+      
+      if (existingBalance) {
+        if (!existingBalance.period && existingBalance.year) {
+          existingBalance.period = existingBalance.year;
+          await existingBalance.save();
+        }
+        return existingBalance;
+      }
+      
+      try {
+        const retryBalance = await LeaveBalance.findOneAndUpdate(
+          { staff: staffId, leaveType: leaveType._id, period },
+          {
+            $setOnInsert: {
+              allocated: defaultAllocation,
+              carriedOver: 0,
+              used: 0,
+              pending: 0,
+            },
+          },
+          { new: true, upsert: true }
+        );
+        return retryBalance;
+      } catch (retryError) {
+        throw new Error('Failed to create or retrieve leave balance. Please try again.');
+      }
+    }
+    
+    throw error;
+  }
 };
 
-// NOTE: Business change — do not reserve days at request creation. Only
-// adjust (deduct) leave balances when a request is finally approved.
-// Therefore we no longer touch the `pending` field when creating/rejecting requests.
 const adjustBalancePending = async ({ staffId, leaveTypeId, period, amount }) => {
-  // Deprecated: reservation behaviour removed. Keep function for compatibility but no-op.
   return;
 };
 
 const adjustBalanceOnFinalApproval = async ({ staffId, leaveTypeId, period, duration }) => {
-  // On final approval, increment used days. Do not touch pending (we no longer reserve at request creation).
   await LeaveBalance.updateOne(
     { staff: staffId, leaveType: leaveTypeId, period },
     {
@@ -79,47 +133,31 @@ const adjustBalanceOnFinalApproval = async ({ staffId, leaveTypeId, period, dura
 };
 
 const adjustBalanceOnRejection = async ({ staffId, leaveTypeId, period, duration }) => {
-  // No-op: since we don't reserve pending days at creation, nothing to revert on rejection.
   return;
 };
 
-/**
- * Builds the approval chain for a leave request based on staff's reporting structure.
- * Chain order: Team Lead → Line Manager → HR (all must be assigned)
- * 
- * @param {Object} staffDoc - Staff document with teamLeadId, lineManagerId, and hrId
- * @returns {Array} Array of approval steps with role, assignee, and status
- */
 const buildApproverChain = (staffDoc) => {
   const chain = [];
 
   const resolveId = (val) => {
     if (!val) return null;
-    // If populated document, return its _id, otherwise return the value (assumed ObjectId/string)
     if (typeof val === 'object' && val._id) return val._id;
     return val;
   };
 
-  // Step 1: Team Lead approval (required)
   const tl = resolveId(staffDoc.teamLeadId);
   if (tl) {
     chain.push({ role: 'teamLead', assignee: tl });
   }
 
-  // Step 2: Line Manager approval (required)
   const lm = resolveId(staffDoc.lineManagerId);
   if (lm) {
     chain.push({ role: 'lineManager', assignee: lm });
   }
 
-  // Step 3: HR final approval (required - specific HR person assigned to staff)
   const hr = resolveId(staffDoc.hrId);
-  // Always include an HR approval step so the workflow consistently ends at HR.
-  // If a specific HR assignee is configured, attach them; otherwise leave assignee null
-  // and fallback to notifying all HRs when notifying or listing pending approvals.
   chain.push({ role: 'hr', assignee: hr || null });
 
-  // Initialize all steps as pending
   return chain.map((step) => ({ ...step, status: 'pending' }));
 };
 
@@ -128,7 +166,6 @@ const deriveStatusFromChain = (chain) => {
   if (!next) {
     return 'approved';
   }
-  // Convert role to lowercase for status (teamLead -> teamlead, lineManager -> linemanager)
   const roleForStatus = next.role.toLowerCase();
   return `pending_${roleForStatus}`;
 };
@@ -161,7 +198,6 @@ export const getMyBalances = async (req, res) => {
         carriedOver: balance.carriedOver,
         used: balance.used,
         pending: balance.pending,
-        // With reservation removed, remaining is calculated from allocated + carriedOver - used
         remaining: balance.allocated + balance.carriedOver - balance.used,
       };
     })
@@ -172,10 +208,55 @@ export const getMyBalances = async (req, res) => {
 
 export const createLeaveRequest = async (req, res) => {
   try {
-    const { leaveTypeId, startDate, endDate, halfDay, coveragePlan, handoverNotes, reason } = req.body;
+    console.log('📥 CREATE REQUEST START');
+    console.log('📥 Content-Type:', req.headers['content-type']);
+    console.log('📥 Has file:', !!req.file);
+    console.log('📥 Body:', req.body);
+    console.log('📥 Body keys:', req.body ? Object.keys(req.body) : 'body is null/undefined');
+    
+    if (req.file) {
+      console.log('📥 File details:', {
+        fieldname: req.file.fieldname,
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        hasBuffer: !!req.file.buffer,
+        bufferLength: req.file.buffer?.length,
+      });
+    }
+    
+    // For multipart/form-data, req.body should be populated by multer
+    // Check if body exists (it should after multer processes the request)
+    if (!req.body) {
+      console.error('❌ req.body is null/undefined after multer');
+      console.error('❌ This might be a multer configuration issue');
+      return res.status(400).json({ 
+        message: 'Request body is missing. Please ensure form data is properly formatted.',
+      });
+    }
+    
+    const body = req.body;
+    
+    const leaveTypeId = body.leaveTypeId || body.leaveType;
+    const startDate = body.startDate;
+    const endDate = body.endDate;
+    const halfDay = body.halfDay;
+    const coveragePlan = body.coveragePlan;
+    const handoverNotes = body.handoverNotes;
+    const reason = body.reason;
+
+    console.log('📥 Extracted fields:', { leaveTypeId, startDate, endDate, reason: !!reason });
 
     if (!leaveTypeId || !startDate || !endDate || !reason) {
-      return res.status(400).json({ message: 'Leave type, dates, and reason are required.' });
+      return res.status(400).json({ 
+        message: 'Leave type, dates, and reason are required.',
+        received: { 
+          leaveTypeId: !!leaveTypeId, 
+          startDate: !!startDate, 
+          endDate: !!endDate, 
+          reason: !!reason 
+        },
+      });
     }
 
     const leaveType = await LeaveType.findById(leaveTypeId);
@@ -189,14 +270,123 @@ export const createLeaveRequest = async (req, res) => {
     }
 
     const durationDays = calculateDurationDays(startDate, endDate, halfDay);
-    const period = currentPeriod(new Date(startDate));
+    
+    const startDateObj = new Date(startDate);
+    if (isNaN(startDateObj.getTime())) {
+      return res.status(400).json({ message: 'Invalid start date provided.' });
+    }
+    
+    const period = currentPeriod(startDateObj);
+    if (!period || isNaN(period)) {
+      return res.status(400).json({ message: 'Invalid period calculated from start date.' });
+    }
 
-    // Ensure balance document exists. We do NOT reserve days at creation anymore.
     await ensureLeaveBalance(staff._id, leaveType, period);
 
     const approverChain = buildApproverChain(staff);
     const status = deriveStatusFromChain(approverChain);
 
+    // Handle file upload to GridFS - INITIALIZE EMPTY ARRAY FIRST
+    const attachments = [];
+    
+    if (req.file && req.file.buffer) {
+      console.log('📎 START: Processing file upload to GridFS');
+      console.log('📎 Buffer size:', req.file.buffer.length);
+      
+      try {
+        // Check MongoDB connection
+        if (!mongoose.connection.db) {
+          console.error('❌ MongoDB not connected');
+          throw new Error('Database connection not established');
+        }
+        
+        const GridFSBucket = mongoose.mongo.GridFSBucket;
+        const db = mongoose.connection.db;
+        const bucket = new GridFSBucket(db, { bucketName: 'leaveAttachments' });
+        
+        // Generate unique filename
+        const timestamp = Date.now();
+        const randomSuffix = Math.round(Math.random() * 1E9);
+        const fileName = req.file.originalname || 'attachment';
+        const gridFilename = `${timestamp}-${randomSuffix}-${fileName}`;
+        
+        console.log('📎 Creating upload stream:', gridFilename);
+        
+        // Create upload stream with metadata
+        const uploadStream = bucket.openUploadStream(gridFilename, {
+          contentType: req.file.mimetype,
+          metadata: {
+            originalName: req.file.originalname,
+            uploadedBy: req.user.id,
+            uploadedAt: new Date(),
+          },
+        });
+        
+        console.log('📎 Upload stream created, writing buffer...');
+        
+        // Upload file using Promise
+        const fileId = await new Promise((resolve, reject) => {
+          // Error handler - MUST be set before writing
+          uploadStream.on('error', (error) => {
+            console.error('❌ Upload stream error:', error);
+            reject(error);
+          });
+          
+          // Finish handler - called when upload completes
+          uploadStream.on('finish', () => {
+            console.log('✅ Upload stream finished');
+            console.log('✅ File ID:', uploadStream.id.toString());
+            resolve(uploadStream.id);
+          });
+          
+          // Write buffer and end stream
+          console.log('📎 Writing buffer to stream...');
+          uploadStream.write(req.file.buffer);
+          uploadStream.end();
+          console.log('📎 Stream ended, waiting for finish event...');
+        });
+        
+        console.log('✅ Upload completed successfully');
+        console.log('✅ File ID:', fileId.toString());
+        
+        // Create attachment object - THIS IS THE KEY PART
+        const attachmentDoc = {
+          fileId: fileId,
+          filename: req.file.originalname || 'attachment',
+          mimetype: req.file.mimetype,
+          size: req.file.size,
+          uploadedAt: new Date(),
+        };
+        
+        // IMPORTANT: Push to array BEFORE creating document
+        attachments.push(attachmentDoc);
+        
+        console.log('✅ Attachment object created and added to array:', {
+          fileId: fileId.toString(),
+          filename: attachmentDoc.filename,
+          size: attachmentDoc.size,
+          arrayLength: attachments.length,
+        });
+        
+      } catch (gridError) {
+        console.error('❌ GridFS Error:', {
+          message: gridError.message,
+          stack: gridError.stack,
+          name: gridError.name,
+        });
+        // Continue without failing the entire request
+        console.error('❌ Continuing without attachment');
+      }
+    } else {
+      console.log('ℹ️ No file to upload');
+    }
+    
+    console.log('📎 Final attachments array before save:', {
+      length: attachments.length,
+      data: attachments,
+    });
+
+    // Create leave request - attachments array is now populated
     const leaveRequest = new LeaveRequest({
       staff: staff._id,
       leaveType: leaveType._id,
@@ -207,6 +397,7 @@ export const createLeaveRequest = async (req, res) => {
       coveragePlan: coveragePlan || undefined,
       handoverNotes: handoverNotes || undefined,
       reason: reason.trim(),
+      attachments: attachments, // This should now contain the attachment
       approverChain,
       status,
       createdBy: req.user.id,
@@ -214,43 +405,78 @@ export const createLeaveRequest = async (req, res) => {
 
     appendTimeline(leaveRequest, 'submitted', req.user.id, undefined);
 
-  await leaveRequest.save();
-  await leaveRequest.populate([ { path: 'leaveType', select: 'name code' } ]);
-  console.log(`💾 Leave request saved: id=${leaveRequest._id} staff=${staff._id} duration=${durationDays}`);
+    console.log('💾 Saving leave request with attachments:', {
+      attachmentsCount: leaveRequest.attachments.length,
+      attachments: leaveRequest.attachments,
+    });
+    
+    await leaveRequest.save();
+    console.log('💾 Leave request saved with ID:', leaveRequest._id);
+    
+    // Verify what was actually saved
+    const savedRequest = await LeaveRequest.findById(leaveRequest._id).lean();
+    console.log('💾 VERIFICATION - Saved to DB:', {
+      id: savedRequest._id,
+      attachmentsCount: savedRequest.attachments?.length || 0,
+      attachments: savedRequest.attachments,
+    });
+    
+    await leaveRequest.populate([{ path: 'leaveType', select: 'name code' }]);
 
-    // Send email notification to first approver
+    // Send email notification
     try {
       const firstApprover = approverChain.find((step) => step.status === 'pending');
       if (firstApprover) {
-        // If the step has a specific assignee, notify them. Otherwise, if it's an HR step without an assignee,
-        // notify all users with the 'hr' role so the request reaches HR.
         if (firstApprover.assignee) {
           const approver = await Staff.findById(firstApprover.assignee);
           if (approver && approver.email) {
             const emailContent = buildLeaveRequestNotificationEmail(approver, staff, leaveRequest, leaveType);
-            await sendEmail({ to: approver.email, subject: emailContent.subject, html: emailContent.html, text: emailContent.text });
-            console.log(`✅ Email sent to ${approver.email} for leave request ${leaveRequest._id}`);
+            await sendEmail({ 
+              to: approver.email, 
+              subject: emailContent.subject, 
+              html: emailContent.html, 
+              text: emailContent.text 
+            });
+            console.log(`✅ Email sent to ${approver.email}`);
           }
         } else if (firstApprover.role === 'hr' && !firstApprover.assignee) {
-          // Notify all HR users
           const hrUsers = await Staff.find({ roles: 'hr' }).select('firstName lastName email').lean();
           for (const hrUser of hrUsers) {
             if (!hrUser?.email) continue;
             const emailContent = buildLeaveRequestNotificationEmail(hrUser, staff, leaveRequest, leaveType);
-            await sendEmail({ to: hrUser.email, subject: emailContent.subject, html: emailContent.html, text: emailContent.text });
-            console.log(`✅ Email sent to HR (${hrUser.email}) for leave request ${leaveRequest._id}`);
+            await sendEmail({ 
+              to: hrUser.email, 
+              subject: emailContent.subject, 
+              html: emailContent.html, 
+              text: emailContent.text 
+            });
+            console.log(`✅ Email sent to HR (${hrUser.email})`);
           }
         }
       }
     } catch (emailError) {
-      console.error('Failed to send leave request notification email:', emailError);
-      // Don't fail the request creation if email fails
+      console.error('Failed to send notification email:', emailError);
     }
 
+    console.log('✅ CREATE REQUEST COMPLETE');
     res.status(201).json(leaveRequest);
+    
   } catch (error) {
-    console.error('Create leave request error:', error);
-    res.status(400).json({ message: error.message || 'Unable to create leave request.' });
+    console.error('❌ CREATE REQUEST ERROR:', error);
+    console.error('❌ Error stack:', error.stack);
+    
+    let errorMessage = 'Unable to create leave request. Please try again.';
+    let statusCode = 400;
+    
+    if (error.code === 11000 || error.code === 11001) {
+      errorMessage = 'A temporary conflict occurred. Please try submitting again.';
+    } else if (error.message) {
+      errorMessage = error.message;
+    } else if (error.name === 'ValidationError') {
+      errorMessage = 'Validation error: ' + Object.values(error.errors).map(e => e.message).join(', ');
+    }
+    
+    res.status(statusCode).json({ message: errorMessage });
   }
 };
 
@@ -294,7 +520,6 @@ const buildApproverMatchConditions = (user) => {
   }
 
   if (roles.has('hr')) {
-    // Match pending HR steps assigned to this user OR unassigned HR steps (assignee missing/null)
     conditions.push({
       status: 'pending_hr',
       approverChain: {
@@ -335,7 +560,6 @@ export const getMyApprovals = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // Find leave requests where the timeline contains an approval/rejection by this user
     const requests = await LeaveRequest.find({
       timeline: {
         $elemMatch: {
@@ -348,7 +572,6 @@ export const getMyApprovals = async (req, res) => {
       .populate('staff', 'firstName lastName staffCode')
       .lean();
 
-    // Flatten actions: for each request, keep only timeline entries by this user
     const actions = [];
     for (const reqDoc of requests) {
       const staffName = `${reqDoc.staff?.firstName || ''} ${reqDoc.staff?.lastName || ''}`.trim();
@@ -372,7 +595,6 @@ export const getMyApprovals = async (req, res) => {
       }
     }
 
-    // Sort by most recent action first
     actions.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
     res.json(actions);
@@ -384,11 +606,10 @@ export const getMyApprovals = async (req, res) => {
 
 const findCurrentPendingStep = (request) => {
   if (!request.status.startsWith('pending_')) return null;
-  const statusRole = request.status.replace('pending_', ''); // e.g., 'teamlead', 'linemanager', 'hr'
-  // Map status role back to chain role (teamlead -> teamLead, linemanager -> lineManager, hr -> hr)
+  const statusRole = request.status.replace('pending_', '');
   const chainRole = statusRole === 'teamlead' ? 'teamLead' 
     : statusRole === 'linemanager' ? 'lineManager' 
-    : statusRole; // 'hr' stays as 'hr'
+    : statusRole;
   return request.approverChain.find((step) => step.role === chainRole && step.status === 'pending');
 };
 
@@ -397,7 +618,6 @@ const userCanActOnStep = (step, user) => {
   if (step.assignee) {
     return step.assignee.toString() === user.id;
   }
-  // HR steps may not have a direct assignee; require hr role
   return (user.roles || []).includes(step.role);
 };
 
@@ -412,12 +632,6 @@ export const approveLeaveRequest = async (req, res) => {
 
   const step = findCurrentPendingStep(leaveRequest);
   if (!userCanActOnStep(step, req.user)) {
-    // Helpful debug log for denied approvals — will show the current step, its assignee and the acting user
-    try {
-      console.warn('[Approve] Denied: step=', JSON.stringify(step), 'user=', JSON.stringify(req.user));
-    } catch (e) {
-      console.warn('[Approve] Denied (could not serialize step/user)');
-    }
     return res.status(403).json({ message: 'You are not authorised to approve this request.' });
   }
 
@@ -432,7 +646,6 @@ export const approveLeaveRequest = async (req, res) => {
   const isFinalApproval = !remaining;
   
   if (remaining) {
-    // Convert role to lowercase for status consistency
     const roleForStatus = remaining.role.toLowerCase();
     leaveRequest.status = `pending_${roleForStatus}`;
   } else {
@@ -449,13 +662,11 @@ export const approveLeaveRequest = async (req, res) => {
   await leaveRequest.save();
   await leaveRequest.populate(['leaveType', 'staff']);
 
-  // Send email notifications
   try {
     const approver = await Staff.findById(req.user.id);
     const staff = await Staff.findById(leaveRequest.staff);
     
     if (isFinalApproval) {
-      // Final approval - notify staff
       if (staff && staff.email) {
         const emailContent = buildLeaveApprovedEmail(staff, approver, leaveRequest, leaveRequest.leaveType, true);
         await sendEmail({
@@ -464,17 +675,14 @@ export const approveLeaveRequest = async (req, res) => {
           html: emailContent.html,
           text: emailContent.text,
         });
-        console.log(`✅ Final approval email sent to ${staff.email} for leave request ${leaveRequest._id}`);
       }
     } else {
-      // Not final - notify next approver and staff
       if (remaining) {
         if (remaining.assignee) {
           const nextApprover = await Staff.findById(remaining.assignee);
           if (nextApprover && nextApprover.email) {
             const emailContent = buildLeaveRequestNotificationEmail(nextApprover, staff, leaveRequest, leaveRequest.leaveType);
             await sendEmail({ to: nextApprover.email, subject: emailContent.subject, html: emailContent.html, text: emailContent.text });
-            console.log(`✅ Approval notification email sent to ${nextApprover.email} for leave request ${leaveRequest._id}`);
           }
         } else if (remaining.role === 'hr' && !remaining.assignee) {
           const hrUsers = await Staff.find({ roles: 'hr' }).select('firstName lastName email').lean();
@@ -482,12 +690,10 @@ export const approveLeaveRequest = async (req, res) => {
             if (!hrUser?.email) continue;
             const emailContent = buildLeaveRequestNotificationEmail(hrUser, staff, leaveRequest, leaveRequest.leaveType);
             await sendEmail({ to: hrUser.email, subject: emailContent.subject, html: emailContent.html, text: emailContent.text });
-            console.log(`✅ Approval notification email sent to HR (${hrUser.email}) for leave request ${leaveRequest._id}`);
           }
         }
       }
       
-      // Also notify staff that their request moved to next stage
       if (staff && staff.email) {
         const emailContent = buildLeaveApprovedEmail(staff, approver, leaveRequest, leaveRequest.leaveType, false);
         await sendEmail({
@@ -496,12 +702,10 @@ export const approveLeaveRequest = async (req, res) => {
           html: emailContent.html,
           text: emailContent.text,
         });
-        console.log(`✅ Progress email sent to ${staff.email} for leave request ${leaveRequest._id}`);
       }
     }
   } catch (emailError) {
-    console.error('Failed to send approval notification emails:', emailError);
-    // Don't fail the approval if email fails
+    console.error('Failed to send approval emails:', emailError);
   }
 
   res.json(leaveRequest);
@@ -540,7 +744,6 @@ export const rejectLeaveRequest = async (req, res) => {
   await leaveRequest.save();
   await leaveRequest.populate(['leaveType', 'staff']);
 
-  // Send rejection email to staff
   try {
     const approver = await Staff.findById(req.user.id);
     const staff = await Staff.findById(leaveRequest.staff);
@@ -553,11 +756,9 @@ export const rejectLeaveRequest = async (req, res) => {
         html: emailContent.html,
         text: emailContent.text,
       });
-      console.log(`✅ Rejection email sent to ${staff.email} for leave request ${leaveRequest._id}`);
     }
   } catch (emailError) {
-    console.error('Failed to send rejection notification email:', emailError);
-    // Don't fail the rejection if email fails
+    console.error('Failed to send rejection email:', emailError);
   }
 
   res.json(leaveRequest);
@@ -568,7 +769,6 @@ export const getCalendarData = async (req, res) => {
   const userRoles = new Set(req.user.roles || []);
   const isApprover = userRoles.has('teamLead') || userRoles.has('lineManager') || userRoles.has('hr');
 
-  // Always get user's own requests
   const myRequests = await LeaveRequest.find({ staff: userId })
     .populate('leaveType', 'name code')
     .populate('staff', 'firstName lastName')
@@ -576,7 +776,7 @@ export const getCalendarData = async (req, res) => {
     .lean();
 
   const events = myRequests
-    .filter((req) => req.leaveType) // Filter out requests without leaveType
+    .filter((req) => req.leaveType)
     .map((req) => ({
       id: req._id.toString(),
       title: `Your ${req.leaveType?.name || 'Leave'}`,
@@ -588,28 +788,24 @@ export const getCalendarData = async (req, res) => {
       colour: 'bg-emerald-100 text-emerald-700',
     }));
 
-  // If user is an approver, get team requests
   if (isApprover) {
     const staff = await Staff.findById(userId);
     if (staff) {
       const teamConditions = [];
 
-      // Team Lead: get requests from staff where this user is teamLeadId
       if (userRoles.has('teamLead')) {
         teamConditions.push({ teamLeadId: userId });
       }
 
-      // Line Manager: get requests from staff where this user is lineManagerId
       if (userRoles.has('lineManager')) {
         teamConditions.push({ lineManagerId: userId });
       }
 
-      // HR: get requests where this HR person is assigned OR all approved requests
       if (userRoles.has('hr')) {
         const teamRequests = await LeaveRequest.find({
-          staff: { $ne: userId }, // Exclude own requests (already added)
+          staff: { $ne: userId },
           $or: [
-            { status: 'approved' }, // Show all approved requests
+            { status: 'approved' },
             {
               status: { $in: ['pending_teamlead', 'pending_linemanager', 'pending_hr'] },
               approverChain: {
@@ -627,7 +823,7 @@ export const getCalendarData = async (req, res) => {
           .lean();
 
         teamRequests
-          .filter((req) => req.leaveType && req.staff) // Filter out incomplete data
+          .filter((req) => req.leaveType && req.staff)
           .forEach((req) => {
             const staffName = `${req.staff?.firstName || ''} ${req.staff?.lastName || ''}`.trim();
             events.push({
@@ -643,7 +839,6 @@ export const getCalendarData = async (req, res) => {
             });
           });
       } else if (teamConditions.length > 0) {
-        // For team leads and line managers, get requests from their direct reports
         const teamStaff = await Staff.find({ $or: teamConditions }).select('_id').lean();
         const teamStaffIds = teamStaff.map((s) => s._id);
 
@@ -658,7 +853,7 @@ export const getCalendarData = async (req, res) => {
             .lean();
 
           teamRequests
-            .filter((req) => req.leaveType && req.staff) // Filter out incomplete data
+            .filter((req) => req.leaveType && req.staff)
             .forEach((req) => {
               const staffName = `${req.staff?.firstName || ''} ${req.staff?.lastName || ''}`.trim();
               events.push({
@@ -679,4 +874,55 @@ export const getCalendarData = async (req, res) => {
   }
 
   res.json({ events });
+};
+
+// Get attachment file from GridFS
+export const getAttachment = async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    
+    if (!fileId || !mongoose.Types.ObjectId.isValid(fileId)) {
+      return res.status(400).json({ message: 'Invalid file ID' });
+    }
+    
+    // Check MongoDB connection
+    if (!mongoose.connection.db) {
+      return res.status(503).json({ message: 'Database connection not established' });
+    }
+    
+    const GridFSBucket = mongoose.mongo.GridFSBucket;
+    const db = mongoose.connection.db;
+    const bucket = new GridFSBucket(db, { bucketName: 'leaveAttachments' });
+    
+    // Check if file exists
+    const files = await bucket.find({ _id: new mongoose.Types.ObjectId(fileId) }).toArray();
+    if (files.length === 0) {
+      return res.status(404).json({ message: 'File not found' });
+    }
+    
+    const file = files[0];
+    
+    // Set headers
+    res.set({
+      'Content-Type': file.contentType || 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${file.metadata?.originalName || file.filename}"`,
+      'Content-Length': file.length,
+    });
+    
+    // Stream file to response
+    const downloadStream = bucket.openDownloadStream(new mongoose.Types.ObjectId(fileId));
+    downloadStream.pipe(res);
+    
+    downloadStream.on('error', (error) => {
+      console.error('Error streaming file:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ message: 'Error downloading file' });
+      }
+    });
+  } catch (error) {
+    console.error('Get attachment error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ message: 'Error retrieving attachment' });
+    }
+  }
 };

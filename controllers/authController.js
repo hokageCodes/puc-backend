@@ -48,6 +48,7 @@ const pickUserProfile = (staff) => ({
   roles: staff.roles,
   division: staff.division,
   leaveEnabled: staff.leaveEnabled,
+  profilePhoto: staff.profilePhoto || '',
 });
 
 const validateScopeAccess = (staff, scope) => {

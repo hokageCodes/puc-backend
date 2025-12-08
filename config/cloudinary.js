@@ -19,6 +19,17 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+// Verify Cloudinary config
+if (!process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET || !process.env.CLOUDINARY_CLOUD_NAME) {
+  console.error('❌ Cloudinary configuration incomplete. Check your .env file.');
+} else {
+  console.log('✅ Cloudinary configured:', {
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY ? 'Present' : 'Missing',
+    api_secret: process.env.CLOUDINARY_API_SECRET ? 'Present' : 'Missing',
+  });
+}
+
 const storage = new CloudinaryStorage({
   cloudinary,
   params: {
@@ -28,10 +39,20 @@ const storage = new CloudinaryStorage({
   },
 });
 
+// Storage for leave request attachments (documents)
+const documentStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'puc-leave-attachments',
+    allowed_formats: ['pdf', 'doc', 'docx', 'txt', 'jpg', 'jpeg', 'png'],
+    resource_type: 'auto', // Allow both images and documents
+  },
+});
+
 if (!process.env.CLOUDINARY_API_KEY) {
   console.error('❌ Cloudinary API key missing. Check your .env file.');
 } else {
   console.log('✅ Cloudinary config loaded for cloud:', process.env.CLOUDINARY_CLOUD_NAME);
 }
 
-export { cloudinary, storage };
+export { cloudinary, storage, documentStorage };

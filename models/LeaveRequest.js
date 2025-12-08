@@ -2,8 +2,10 @@ import mongoose from 'mongoose';
 
 const AttachmentSchema = new mongoose.Schema(
   {
-    url: { type: String, required: true },
+    fileId: { type: mongoose.Schema.Types.ObjectId, required: true }, // GridFS file ID
     filename: { type: String, required: true },
+    mimetype: { type: String, required: true },
+    size: { type: Number, required: true },
     uploadedAt: { type: Date, default: Date.now },
   },
   { _id: true }

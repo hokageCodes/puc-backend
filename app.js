@@ -121,8 +121,27 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// JSON parsing middleware
-app.use(express.json());
+// FIXED: Proper conditional body parsing middleware
+// Skip body parsing entirely for multipart/form-data - multer will handle it
+app.use((req, res, next) => {
+  const contentType = req.headers['content-type'] || '';
+  
+  if (contentType.includes('multipart/form-data')) {
+    // Skip ALL body parsing for multipart/form-data - multer will handle it
+    // This is critical - express.json() and express.urlencoded() will consume the stream
+    // and leave nothing for multer to parse
+    return next();
+  }
+  
+  // For non-multipart requests, parse JSON and urlencoded
+  express.json()(req, res, (err) => {
+    if (err) {
+      console.error('JSON parsing error:', err);
+      return res.status(400).json({ error: 'Invalid JSON' });
+    }
+    express.urlencoded({ extended: true })(req, res, next);
+  });
+});
 
 // Database connection middleware - ensures DB is connected before handling requests
 // Critical for serverless environments where connection might not be ready on first request
@@ -158,6 +177,8 @@ app.use((req, res, next) => {
 
 // Serve static files
 app.use('/uploads', express.static('uploads'));
+// Also serve leave attachments
+app.use('/api/uploads', express.static('uploads'));
 
 // API routes
 // Public staff endpoint (no auth) - used by public site to render team members
