@@ -39,6 +39,23 @@ const storage = new CloudinaryStorage({
   },
 });
 
+// Storage for blog/news cover images
+const blogStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'puc-blog-covers',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+    // Optimize: smaller transformation, better compression
+    transformation: [{ 
+      width: 1600, 
+      height: 900, 
+      crop: 'limit', 
+      quality: 'auto:eco',  // Use eco quality for faster uploads
+      fetch_format: 'auto'   // Auto-select best format
+    }],
+  },
+});
+
 // Storage for leave request attachments (documents)
 const documentStorage = new CloudinaryStorage({
   cloudinary,
@@ -55,4 +72,4 @@ if (!process.env.CLOUDINARY_API_KEY) {
   console.log('✅ Cloudinary config loaded for cloud:', process.env.CLOUDINARY_CLOUD_NAME);
 }
 
-export { cloudinary, storage, documentStorage };
+export { cloudinary, storage, blogStorage, documentStorage };

@@ -1,7 +1,7 @@
 // routes/blogRoutes.js
 import express from 'express';
 import multer from 'multer';
-import { storage } from '../config/cloudinary.js';
+import { blogStorage } from '../config/cloudinary.js';
 import {
   createBlog,
   updateBlog,
@@ -14,7 +14,12 @@ import {
 } from '../controllers/blogController.js';
 import { protect } from '../middleware/auth.js';
 
-const upload = multer({ storage });
+const upload = multer({ 
+  storage: blogStorage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit
+  }
+});
 
 const router = express.Router();
 

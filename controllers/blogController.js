@@ -2,18 +2,28 @@
 import Blog from '../models/Blog.js';
 
 export const createBlog = async (req, res) => {
+  console.log('📝 Creating blog post...');
+  console.log('File uploaded:', req.file ? 'Yes' : 'No');
+  
   const { title, slug, excerpt, author, coverImage, tags, content, status, scheduledAt } = req.body;
   
   // Use uploaded file or provided URL
   const imageUrl = req.file?.path || coverImage;
+  
+  console.log('Image URL:', imageUrl);
 
   if (!title || !slug || !imageUrl || !content) {
+    console.log('❌ Missing required fields:', { title: !!title, slug: !!slug, imageUrl: !!imageUrl, content: !!content });
     return res.status(400).json({ message: 'Missing required fields' });
   }
 
   try {
+    console.log('Checking slug uniqueness...');
     const exists = await Blog.findOne({ slug });
-    if (exists) return res.status(409).json({ message: 'Slug already exists' });
+    if (exists) {
+      console.log('❌ Slug already exists');
+      return res.status(409).json({ message: 'Slug already exists' });
+    }
 
     // Parse tags if it's a string
     let parsedTags = tags;
@@ -25,6 +35,7 @@ export const createBlog = async (req, res) => {
       }
     }
 
+    console.log('Creating blog document...');
     const blogData = {
       title,
       slug,
@@ -44,10 +55,11 @@ export const createBlog = async (req, res) => {
     }
 
     const newBlog = await Blog.create(blogData);
+    console.log('✅ Blog created successfully:', newBlog._id);
 
     res.status(201).json(newBlog);
   } catch (err) {
-    console.error('Create blog error:', err.message);
+    console.error('❌ Create blog error:', err.message, err.stack);
     res.status(500).json({ message: 'Server error' });
   }
 };
