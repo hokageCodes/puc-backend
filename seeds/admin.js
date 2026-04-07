@@ -11,8 +11,13 @@ if (!MONGODB_URI) {
   process.exit(1);
 }
 
-const ADMIN_EMAIL = 'admin@paulusoro.com';
-const ADMIN_PASSWORD = 'Admin123!';
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@paulusoro.com').toLowerCase();
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+
+if (!ADMIN_PASSWORD) {
+  console.error('❌ ADMIN_PASSWORD is not defined.');
+  process.exit(1);
+}
 
 async function seedAdmin() {
   try {

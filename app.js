@@ -4,6 +4,7 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import multer from 'multer';
+import mongoose from 'mongoose';
 import { v2 as cloudinary } from 'cloudinary';
 import connectDB from './config/db.js';
 
@@ -15,19 +16,10 @@ import teamRoutes from './routes/teamRoutes.js';
 import practiceAreaRoutes from './routes/practiceAreaRoutes.js';
 import authRoutes from './routes/authRoutes.js';
 import leaveRoutes from './routes/leaveRoutes.js';
+import { requireAuth, requireRoles } from './middleware/auth.js';
 
 // Load environment variables FIRST
 dotenv.config();
-
-// Debug: Log Email service configuration
-console.log('🔍 Email Service Configuration:', {
-  RESEND_API_KEY: process.env.RESEND_API_KEY ? `✅ Set (${process.env.RESEND_API_KEY.substring(0, 10)}...)` : '❌ MISSING - Will use SMTP',
-  RESEND_FROM: process.env.RESEND_FROM || 'not set',
-  EMAIL_FROM: process.env.EMAIL_FROM || '❌ MISSING',
-  SMTP_HOST: process.env.SMTP_HOST || '❌ MISSING',
-  SMTP_PORT: process.env.SMTP_PORT || '❌ MISSING',
-  NODE_ENV: process.env.NODE_ENV || 'not set',
-});
 
 if (!process.env.RESEND_API_KEY) {
   console.warn('⚠️ WARNING: RESEND_API_KEY is not set. Emails will use SMTP (less reliable).');
@@ -35,13 +27,6 @@ if (!process.env.RESEND_API_KEY) {
 } else {
   console.log('✅ Resend API configured - emails will use Resend (most reliable!)');
 }
-
-// Debug: Log Cloudinary env vars (remove after testing)
-console.log('🔍 Cloudinary Configuration:', {
-  CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '❌ MISSING',
-  CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY ? '✅ Present' : '❌ MISSING',
-  CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET ? '✅ Present' : '❌ MISSING',
-});
 
 // Configure Cloudinary AFTER dotenv
 cloudinary.config({
@@ -147,9 +132,7 @@ app.use((req, res, next) => {
 // Critical for serverless environments where connection might not be ready on first request
 app.use(async (req, res, next) => {
   try {
-    // Ensure MongoDB is connected before processing request
-    const mongoose = await import('mongoose');
-    if (mongoose.default.connection.readyState !== 1) {
+    if (mongoose.connection.readyState !== 1) {
       // Connection not ready, wait for it
       await connectDB();
     }
@@ -166,11 +149,9 @@ app.use(async (req, res, next) => {
 // Request logging
 app.use((req, res, next) => {
   console.log(`${req.method} ${req.path}`, {
-    cookies: Object.keys(req.cookies),
-    allCookies: req.cookies,
     origin: req.headers.origin,
     userAgent: req.headers['user-agent']?.substring(0, 50) + '...',
-    hasAuthToken: !!req.cookies.admin_token
+    hasAuthToken: !!req.cookies.admin_token,
   });
   next();
 });
@@ -181,9 +162,10 @@ app.use('/uploads', express.static('uploads'));
 app.use('/api/uploads', express.static('uploads'));
 
 // API routes
-// Public staff endpoint (no auth) - used by public site to render team members
-import { getPublicStaff } from './controllers/staffController.js';
+// Public staff endpoints (no auth) - used by public site to render team members
+import { getPublicStaff, getPublicStaffById } from './controllers/staffController.js';
 app.get('/api/public/staff', getPublicStaff);
+app.get('/api/public/staff/:id', getPublicStaffById);
 
 app.use('/api/staff', staffRoutes);
 app.use('/api/leave', leaveRoutes);
@@ -209,13 +191,12 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(),
-    cookies: req.cookies,
     environment: process.env.NODE_ENV
   });
 });
 
 // SMTP diagnostic endpoint (for debugging production issues)
-app.get('/api/diagnostic/smtp', async (req, res) => {
+app.get('/api/diagnostic/smtp', requireAuth({ scope: 'cms' }), requireRoles('admin'), async (req, res) => {
   const { verifyConnection } = await import('./utils/email.js');
   
   const emailConfig = {
@@ -265,21 +246,6 @@ app.get('/api/diagnostic/smtp', async (req, res) => {
   });
 });
 
-// Cookie test endpoint
-app.get('/test-cookie', (req, res) => {
-  res.cookie('test_cookie', 'working', {
-    httpOnly: false,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge: 60000
-  });
-  
-  res.json({ 
-    message: 'Test cookie set',
-    cookies: req.cookies
-  });
-});
-
 // Fallback for undefined routes
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
@@ -305,14 +271,5 @@ app.use((err, req, res, next) => {
     ...(process.env.NODE_ENV === 'development' && err.stack ? { stack: err.stack } : {}),
   });
 });
-
-// Only start server if not running on Vercel (serverless)
-// Vercel will handle the serverless function invocation
-if (process.env.VERCEL !== '1' && !process.env.VERCEL_ENV) {
-  const PORT = process.env.PORT || 5000;
-  app.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
-  });
-}
 
 export default app;

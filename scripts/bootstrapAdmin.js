@@ -10,8 +10,11 @@ const run = async () => {
     await mongoose.connect(uri);
     console.log('✅ Connected to MongoDB');
 
-    const email = 'admin@paulusoro.com';
-    const password = 'Admin123!';
+    const email = (process.env.BOOTSTRAP_ADMIN_EMAIL || 'admin@paulusoro.com').toLowerCase();
+    const password = process.env.BOOTSTRAP_ADMIN_PASSWORD;
+    if (!password) {
+      throw new Error('BOOTSTRAP_ADMIN_PASSWORD must be set');
+    }
 
     const passwordHash = await bcrypt.hash(password, 12);
 
@@ -34,7 +37,7 @@ const run = async () => {
     );
 
     console.log('✅ Admin staff ready:', admin.email);
-    console.log('🔐 Temporary password:', password);
+    console.log('🔐 Bootstrap admin password was set from environment variable');
   } catch (error) {
     console.error('❌ Failed to bootstrap admin:', error);
   } finally {

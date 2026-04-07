@@ -7,6 +7,7 @@ import { sendEmail, buildActivationEmail, buildPasswordResetEmail } from '../uti
 const ACCESS_TOKEN_TTL = process.env.JWT_ACCESS_EXPIRES_IN || '15m';
 const REFRESH_TOKEN_TTL = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
 const REFRESH_COOKIE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
+const ACCESS_COOKIE_MAX_AGE = 15 * 60 * 1000; // 15 minutes
 
 const getAccessSecret = () => {
   const secret = process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET;
@@ -25,6 +26,7 @@ const getRefreshSecret = () => {
 };
 
 const scopeCookieName = (scope) => (scope === 'cms' ? 'cms_refresh_token' : 'leave_refresh_token');
+const scopeAccessCookieName = (scope) => (scope === 'cms' ? 'admin_token' : 'leave_access_token');
 
 const cookieOptions = {
   httpOnly: true,
@@ -53,10 +55,24 @@ const pickUserProfile = (staff) => ({
 
 const validateScopeAccess = (staff, scope) => {
   if (scope === 'cms') {
-    const allowed = staff.roles?.includes('admin') || staff.roles?.includes('hr') || staff.roles?.includes('cms');
+    const rawRoles = Array.isArray(staff.roles)
+      ? staff.roles
+      : typeof staff.roles === 'string'
+      ? staff.roles.split(',')
+      : [];
+
+    const normalizedRoles = rawRoles
+      .map((role) => String(role).trim().toLowerCase())
+      .filter(Boolean);
+
+    const allowed = normalizedRoles.includes('admin')
+      || normalizedRoles.includes('hr')
+      || normalizedRoles.includes('cms');
+
     if (!allowed) {
-      const error = new Error('Not authorized for CMS access');
+      const error = new Error('Not authorized for CMS access. Account must have admin, hr, or cms role.');
       error.status = 403;
+      error.meta = { rawRoles, normalizedRoles };
       throw error;
     }
     return;
@@ -101,8 +117,19 @@ const setRefreshCookie = (res, token, scope) => {
   });
 };
 
+const setAccessCookie = (res, token, scope) => {
+  res.cookie(scopeAccessCookieName(scope), token, {
+    ...cookieOptions,
+    maxAge: ACCESS_COOKIE_MAX_AGE,
+  });
+};
+
 const clearRefreshCookie = (res, scope) => {
   res.clearCookie(scopeCookieName(scope), cookieOptions);
+};
+
+const clearAccessCookie = (res, scope) => {
+  res.clearCookie(scopeAccessCookieName(scope), cookieOptions);
 };
 
 const createPasswordToken = async (staff) => {
@@ -116,6 +143,7 @@ const createPasswordToken = async (staff) => {
 const respondWithTokens = async (res, staff, scope) => {
   const accessToken = createAccessToken(staff, scope);
   const refreshToken = createRefreshToken(staff, scope);
+  setAccessCookie(res, accessToken, scope);
   setRefreshCookie(res, refreshToken, scope);
 
   // Resolve reporting relationships so the leave frontend can display approver names
@@ -142,14 +170,16 @@ const respondWithTokens = async (res, staff, scope) => {
 };
 
 export const login = async (req, res) => {
+  let loginEmail = '';
   try {
     const { email, password, scope = 'leave' } = req.body;
+    loginEmail = String(email || '').toLowerCase().trim();
 
     if (!email || !password) {
       return res.status(400).json({ message: 'Email and password are required' });
     }
 
-    const staff = await Staff.findOne({ email: email.toLowerCase().trim() });
+    const staff = await Staff.findOne({ email: loginEmail });
     if (!staff || !staff.passwordHash) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
@@ -157,6 +187,13 @@ export const login = async (req, res) => {
     const passwordOk = await comparePasswords(password, staff.passwordHash);
     if (!passwordOk) {
       return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    if (scope === 'cms' && process.env.NODE_ENV !== 'production') {
+      console.info('[Auth] CMS login attempt', {
+        email: loginEmail,
+        roles: Array.isArray(staff.roles) ? staff.roles : staff.roles ? [staff.roles] : [],
+      });
     }
 
     validateScopeAccess(staff, scope);
@@ -167,6 +204,12 @@ export const login = async (req, res) => {
 
     return respondWithTokens(res, staff, scope);
   } catch (err) {
+    if (err?.status === 403 && process.env.NODE_ENV !== 'production') {
+      console.warn('[Auth] CMS login denied', {
+        email: loginEmail,
+        roles: err?.meta?.normalizedRoles || [],
+      });
+    }
     console.error('Login error:', err);
     const status = err.status || 500;
     return res.status(status).json({ message: err.message || 'Unable to login' });
@@ -232,6 +275,7 @@ export const logout = async (req, res) => {
   }
 
   clearRefreshCookie(res, scope);
+  clearAccessCookie(res, scope);
   res.json({ message: 'Logged out successfully' });
 };
 
@@ -255,56 +299,9 @@ export const sendInvite = async (req, res) => {
 
     res.json({ message: 'Activation email sent' });
   } catch (err) {
-    console.error('❌ Send invite error:', err);
-    console.error('Error stack:', err.stack);
-    console.error('Error code:', err.code);
-    console.error('Error message:', err.message);
-    console.error('RESEND_API_KEY in env:', !!process.env.RESEND_API_KEY);
-    console.error('Full error object:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
-    
-    // Provide more specific error messages based on error type
-    let errorMessage = 'Unable to send activation email';
-    let statusCode = 500;
-    
-    // Check if Resend was attempted
-    const resendAvailable = !!process.env.RESEND_API_KEY;
-    const usedResend = err.code !== 'ETIMEDOUT' && err.code !== 'ESOCKET' && err.code !== 'ECONNREFUSED' && err.code !== 'SMTP_NOT_CONFIGURED';
-    
-    if (err.code === 'SMTP_NOT_CONFIGURED') {
-      if (resendAvailable) {
-        errorMessage = 'Email service error. Resend API is configured but failed. Check Render logs for details.';
-      } else {
-        errorMessage = 'Email service is not configured. Please add RESEND_API_KEY to Render environment variables (recommended) or configure SMTP settings.';
-      }
-      statusCode = 503; // Service Unavailable
-    } else if (err.code === 'ETIMEDOUT' || err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND' || err.code === 'ESOCKET') {
-      if (resendAvailable) {
-        errorMessage = `SMTP connection failed (Resend should have been used but wasn't). Check Render logs - RESEND_API_KEY may not be loaded. Verify variable is set correctly and service was redeployed.`;
-      } else {
-        errorMessage = `Email connection failed: ${err.message || 'Network error'}. Add RESEND_API_KEY to Render environment variables (recommended) or check SMTP settings.`;
-      }
-    } else if (err.code === 'EAUTH' || err.responseCode === 535) {
-      errorMessage = `Email authentication failed: ${err.message || 'Invalid credentials'}. Verify SMTP_USER and SMTP_PASS, or use Resend API (RESEND_API_KEY) instead.`;
-    } else if (err.code === 'RESEND_API_ERROR' || err.code === 'RESEND_NOT_CONFIGURED') {
-      errorMessage = `Resend API error: ${err.message}. Check your RESEND_API_KEY in Render environment variables.`;
-    } else if (err.message && err.message.includes('SMTP')) {
-      errorMessage = `Email service error: ${err.message}`;
-    } else {
-      // Show the actual error message in production for debugging
-      errorMessage = `Email send failed: ${err.message || 'Unknown error'}`;
-    }
-    
-    // Always include error details in response for debugging
-    res.status(statusCode).json({ 
-      message: errorMessage,
-      error: err.message,
-      code: err.code,
-      responseCode: err.responseCode,
-      resendAvailable,
-      usedResend,
-      // Include full error in development
-      ...(process.env.NODE_ENV === 'development' ? { stack: err.stack } : {})
-    });
+    console.error('Send invite error:', err?.message || err);
+    const statusCode = err?.code === 'SMTP_NOT_CONFIGURED' ? 503 : 500;
+    res.status(statusCode).json({ message: 'Unable to send activation email at the moment' });
   }
 };
 
@@ -358,6 +355,8 @@ export const resetPassword = async (req, res) => {
 
     clearRefreshCookie(res, 'leave');
     clearRefreshCookie(res, 'cms');
+    clearAccessCookie(res, 'leave');
+    clearAccessCookie(res, 'cms');
 
     res.json({ message: 'Password updated successfully' });
   } catch (err) {
@@ -397,6 +396,8 @@ export const activateAccount = async (req, res) => {
 
     clearRefreshCookie(res, 'leave');
     clearRefreshCookie(res, 'cms');
+    clearAccessCookie(res, 'leave');
+    clearAccessCookie(res, 'cms');
 
     res.json({ message: 'Account activated successfully' });
   } catch (err) {

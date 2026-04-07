@@ -127,9 +127,8 @@ export const getAllStaff = async (req, res) => {
       .populate('practiceAreas', 'name')
       .populate('teamLeadId', 'firstName lastName staffCode')
       .populate('lineManagerId', 'firstName lastName staffCode')
-      .populate('hrId', 'firstName lastName staffCode');
-
-    await Promise.all(staffList.map(ensureStaffCode));
+      .populate('hrId', 'firstName lastName staffCode')
+      .lean();
 
     res.json(staffList);
   } catch (err) {
@@ -152,6 +151,27 @@ export const getPublicStaff = async (req, res) => {
   } catch (err) {
     console.error('getPublicStaff error:', err);
     res.status(500).json({ error: 'Failed to fetch public staff list', details: err.message });
+  }
+};
+
+// Public endpoint: GET /api/public/staff/:id
+export const getPublicStaffById = async (req, res) => {
+  try {
+    const staff = await Staff.findOne({ _id: req.params.id, isVisible: { $ne: false } })
+      .select('firstName lastName position profilePhoto bio email phoneNumber practiceAreas department team staffCode')
+      .populate('department', 'name')
+      .populate('team', 'name')
+      .populate('practiceAreas', 'name')
+      .lean();
+
+    if (!staff) {
+      return res.status(404).json({ error: 'Staff not found' });
+    }
+
+    return res.json(staff);
+  } catch (err) {
+    console.error('getPublicStaffById error:', err);
+    return res.status(500).json({ error: 'Failed to fetch public staff detail', details: err.message });
   }
 };
 

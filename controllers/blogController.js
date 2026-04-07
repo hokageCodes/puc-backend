@@ -1,5 +1,19 @@
 // controllers/blogController.js
 import Blog from '../models/Blog.js';
+import sanitizeHtml from 'sanitize-html';
+
+const sanitizeBlogContent = (value) =>
+  sanitizeHtml(value || '', {
+    allowedTags: [...sanitizeHtml.defaults.allowedTags, 'img', 'h1', 'h2', 'h3'],
+    allowedAttributes: {
+      a: ['href', 'name', 'target', 'rel'],
+      img: ['src', 'alt', 'title', 'width', 'height', 'loading'],
+    },
+    allowedSchemes: ['http', 'https', 'mailto', 'tel', 'data'],
+    transformTags: {
+      a: sanitizeHtml.simpleTransform('a', { rel: 'noopener noreferrer nofollow' }),
+    },
+  });
 
 export const createBlog = async (req, res) => {
   console.log('📝 Creating blog post...');
@@ -36,6 +50,12 @@ export const createBlog = async (req, res) => {
     }
 
     console.log('Creating blog document...');
+    const sanitizedContent = sanitizeBlogContent(content);
+
+    if (!sanitizedContent.trim()) {
+      return res.status(400).json({ message: 'Blog content is invalid after sanitization' });
+    }
+
     const blogData = {
       title,
       slug,
@@ -43,7 +63,7 @@ export const createBlog = async (req, res) => {
       author,
       coverImage: imageUrl,
       tags: parsedTags || [],
-      content,
+      content: sanitizedContent,
       status: status || 'draft',
       createdBy: req.user.id,
     };
@@ -98,7 +118,7 @@ export const updateBlog = async (req, res) => {
       ...(author !== undefined && { author }),
       ...(imageUrl && { coverImage: imageUrl }),
       ...(tags && { tags: parsedTags || [] }),
-      ...(content && { content }),
+      ...(content && { content: sanitizeBlogContent(content) }),
       ...(status && { status }),
       ...(featured !== undefined && { featured }),
       updatedBy: req.user.id,
@@ -138,16 +158,33 @@ export const deleteBlog = async (req, res) => {
 export const getAllBlogs = async (req, res) => {
   try {
     const { status, featured } = req.query;
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+    const skip = (page - 1) * limit;
     
     const filter = {};
     if (status) filter.status = status;
     if (featured === 'true') filter.featured = true;
 
-    const blogs = await Blog.find(filter)
+    const [blogs, total] = await Promise.all([
+      Blog.find(filter)
       .sort({ createdAt: -1 })
-      .populate('createdBy', 'email');
+      .skip(skip)
+      .limit(limit)
+      .populate('createdBy', 'email')
+      .lean(),
+      Blog.countDocuments(filter),
+    ]);
       
-    res.json(blogs);
+    res.json({
+      data: blogs,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit),
+      },
+    });
   } catch (err) {
     console.error('Get blogs error:', err.message);
     res.status(500).json({ message: 'Server error' });
@@ -156,12 +193,31 @@ export const getAllBlogs = async (req, res) => {
 
 export const getPublicBlogs = async (req, res) => {
   try {
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 12, 1), 50);
+    const skip = (page - 1) * limit;
+
     // Only return published blogs, sorted by published date or creation date
-    const blogs = await Blog.find({ status: 'published' })
+    const filter = { status: 'published' };
+    const [blogs, total] = await Promise.all([
+      Blog.find(filter)
       .sort({ publishedAt: -1, createdAt: -1 })
-      .populate('createdBy', 'email');
+      .skip(skip)
+      .limit(limit)
+      .select('title slug excerpt author coverImage tags publishedAt createdAt featured views likesCount')
+      .lean(),
+      Blog.countDocuments(filter),
+    ]);
       
-    res.json(blogs);
+    res.json({
+      data: blogs,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit),
+      },
+    });
   } catch (err) {
     console.error('Get public blogs error:', err.message);
     res.status(500).json({ message: 'Server error' });
@@ -191,10 +247,10 @@ export const getBlogBySlug = async (req, res) => {
     const blog = await query;
     if (!blog) return res.status(404).json({ message: 'Blog not found' });
 
-    // Only increment views for published posts
+    // Only increment views for published posts; use atomic increment to avoid lost updates.
     if (blog.status === 'published') {
-      blog.views += 1;
-      await blog.save();
+      await Blog.updateOne({ _id: blog._id }, { $inc: { views: 1 } });
+      blog.views = (blog.views || 0) + 1;
     }
 
     const blogData = blog.toObject();

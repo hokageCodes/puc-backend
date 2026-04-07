@@ -19,23 +19,13 @@ export const login = async (req, res) => {
       return res.status(400).json({ message: 'Email and password are required' });
     }
 
-    console.log('Login attempt for email:', email);
-
     const admin = await Admin.findOne({ email });
     if (!admin) {
-      console.log('Admin not found for email:', email);
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    console.log('Found admin:', {
-      id: admin._id,
-      email: admin.email,
-      isAdmin: admin.isAdmin
-    });
-
     const isMatch = await admin.comparePassword(password);
     if (!isMatch) {
-      console.log('Password mismatch for email:', email);
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
@@ -52,8 +42,6 @@ export const login = async (req, res) => {
 
     const token = jwt.sign(tokenPayload, getAccessSecret(), { expiresIn: '24h' });
 
-    console.log('Generated token:', token.substring(0, 50) + '...');
-
     // Enhanced cookie configuration for production
     const cookieOptions = {
       httpOnly: true,
@@ -61,42 +49,20 @@ export const login = async (req, res) => {
       sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
       maxAge: 24 * 60 * 60 * 1000, // 24 hours in milliseconds
       path: '/',
-      domain: process.env.NODE_ENV === 'production' ? undefined : undefined // Let browser handle domain
     };
-
-    console.log('Setting cookie with options:', cookieOptions);
-    console.log('Environment:', process.env.NODE_ENV);
 
     // Set the cookie
     res.cookie('admin_token', token, cookieOptions);
 
-    // Also set a test cookie to verify cookie setting works
-    res.cookie('test_cookie', 'test_value', {
-      httpOnly: false, // Make it accessible to JS for testing
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-      maxAge: 24 * 60 * 60 * 1000,
-      path: '/'
-    });
-
     // Prepare response data
     const responseData = {
       message: 'Login successful',
-      token, // Add token to response for localStorage fallback
       admin: {
         id: admin._id,
         email: admin.email,
         isAdmin: admin.isAdmin,
       },
-      // Add debug info
-      debug: {
-        cookieSet: true,
-        environment: process.env.NODE_ENV,
-        tokenLength: token.length
-      }
     };
-
-    console.log('Login successful, sending response:', responseData);
 
     // Send response
     res.json(responseData);
@@ -128,8 +94,6 @@ export const getMe = async (req, res) => {
 };
 
 export const logout = (req, res) => {
-  console.log('Admin logout:', req.user?.email);
-  
   const cookieOptions = {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
@@ -138,7 +102,6 @@ export const logout = (req, res) => {
   };
 
   res.clearCookie('admin_token', cookieOptions);
-  res.clearCookie('test_cookie', cookieOptions);
   
   res.json({ message: 'Logged out successfully' });
 };

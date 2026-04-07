@@ -5,7 +5,12 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://pucit:orochimaru1@mfonbooks.krds7.mongodb.net/PUC';
+const MONGODB_URI = process.env.MONGODB_URI || process.env.MONGO_URI;
+
+if (!MONGODB_URI) {
+  console.error('❌ MONGODB_URI (or MONGO_URI) is not defined.');
+  process.exit(1);
+}
 
 const connectDB = async () => {
   try {
@@ -20,9 +25,12 @@ const connectDB = async () => {
 
 const createAdmin = async () => {
   try {
-    // New admin credentials
-    const adminEmail = 'admin@paulusoro.com';
-    const adminPassword = 'Admin123!';
+    const adminEmail = (process.env.ADMIN_EMAIL || 'admin@paulusoro.com').toLowerCase();
+    const adminPassword = process.env.ADMIN_PASSWORD;
+
+    if (!adminPassword) {
+      throw new Error('ADMIN_PASSWORD must be set');
+    }
 
     console.log('🗑️  Deleting existing admin if any...');
     const deleteResult = await Admin.deleteMany({ email: adminEmail });
@@ -42,7 +50,7 @@ const createAdmin = async () => {
     console.log('📋 ADMIN CREDENTIALS:');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('📧 Email:    ' + adminEmail);
-    console.log('🔐 Password: ' + adminPassword);
+    console.log('🔐 Password source: ADMIN_PASSWORD environment variable');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('');
     console.log('🆔 Admin ID:', admin._id);

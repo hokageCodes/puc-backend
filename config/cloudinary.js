@@ -1,5 +1,8 @@
 import { v2 as cloudinary } from 'cloudinary';
 import { createRequire } from 'module';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const require = createRequire(import.meta.url);
 
@@ -19,15 +22,16 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Verify Cloudinary config
-if (!process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET || !process.env.CLOUDINARY_CLOUD_NAME) {
-  console.error('❌ Cloudinary configuration incomplete. Check your .env file.');
+const hasCloudinaryConfig = Boolean(
+  process.env.CLOUDINARY_API_KEY
+  && process.env.CLOUDINARY_API_SECRET
+  && process.env.CLOUDINARY_CLOUD_NAME
+);
+
+if (!hasCloudinaryConfig) {
+  console.warn('Cloudinary configuration incomplete. File uploads will fail until CLOUDINARY_* env vars are set.');
 } else {
-  console.log('✅ Cloudinary configured:', {
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY ? 'Present' : 'Missing',
-    api_secret: process.env.CLOUDINARY_API_SECRET ? 'Present' : 'Missing',
-  });
+  console.log(`Cloudinary config loaded for cloud: ${process.env.CLOUDINARY_CLOUD_NAME}`);
 }
 
 const storage = new CloudinaryStorage({
@@ -65,11 +69,5 @@ const documentStorage = new CloudinaryStorage({
     resource_type: 'auto', // Allow both images and documents
   },
 });
-
-if (!process.env.CLOUDINARY_API_KEY) {
-  console.error('❌ Cloudinary API key missing. Check your .env file.');
-} else {
-  console.log('✅ Cloudinary config loaded for cloud:', process.env.CLOUDINARY_CLOUD_NAME);
-}
 
 export { cloudinary, storage, blogStorage, documentStorage };

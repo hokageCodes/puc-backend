@@ -15,7 +15,7 @@ const StaffSchema = new mongoose.Schema(
     position: { type: String },
 
     employeeId: { type: String, unique: true, sparse: true },
-    staffCode: { type: String, unique: true, sparse: true },
+    staffCode: { type: String },
 
     division: { type: String, enum: STAFF_DIVISIONS, default: 'legal' },
     roles: { type: [String], default: ['staff'] },
@@ -54,7 +54,6 @@ const StaffSchema = new mongoose.Schema(
   }
 );
 
-StaffSchema.index({ email: 1 });
 StaffSchema.index({ staffCode: 1 }, { unique: true, sparse: true });
 StaffSchema.index({ roles: 1 });
 

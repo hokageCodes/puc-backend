@@ -259,7 +259,23 @@ export const createLeaveRequest = async (req, res) => {
       });
     }
 
-    const leaveType = await LeaveType.findById(leaveTypeId);
+    // Try to resolve leaveTypeId which may be an ObjectId or a string key/name/code
+    let leaveType = null;
+    if (mongoose.Types.ObjectId.isValid(String(leaveTypeId))) {
+      leaveType = await LeaveType.findById(leaveTypeId);
+    }
+
+    if (!leaveType) {
+      // Attempt to find by code, key, or name as a fallback for legacy clients
+      leaveType = await LeaveType.findOne({
+        $or: [
+          { code: leaveTypeId },
+          { key: leaveTypeId },
+          { name: leaveTypeId },
+        ],
+      });
+    }
+
     if (!leaveType || !leaveType.isActive) {
       return res.status(404).json({ message: 'Leave type not found.' });
     }
@@ -885,6 +901,31 @@ export const getAttachment = async (req, res) => {
       return res.status(400).json({ message: 'Invalid file ID' });
     }
     
+    const objectFileId = new mongoose.Types.ObjectId(fileId);
+
+    const linkedRequest = await LeaveRequest.findOne({
+      'attachments.fileId': objectFileId,
+    })
+      .select('staff approverChain status')
+      .lean();
+
+    if (!linkedRequest) {
+      return res.status(404).json({ message: 'Attachment not linked to any leave request' });
+    }
+
+    const roles = new Set(req.user.roles || []);
+    const isOwner = String(linkedRequest.staff) === String(req.user.id);
+    const isPrivilegedRole = roles.has('admin') || roles.has('hr');
+    const explicitlyAssignedApprover = Array.isArray(linkedRequest.approverChain)
+      && linkedRequest.approverChain.some((step) => step.assignee && String(step.assignee) === String(req.user.id));
+    const fallbackHrApprover = roles.has('hr')
+      && Array.isArray(linkedRequest.approverChain)
+      && linkedRequest.approverChain.some((step) => step.role === 'hr' && !step.assignee);
+
+    if (!isOwner && !isPrivilegedRole && !explicitlyAssignedApprover && !fallbackHrApprover) {
+      return res.status(403).json({ message: 'Not authorised to access this attachment' });
+    }
+
     // Check MongoDB connection
     if (!mongoose.connection.db) {
       return res.status(503).json({ message: 'Database connection not established' });
@@ -895,7 +936,7 @@ export const getAttachment = async (req, res) => {
     const bucket = new GridFSBucket(db, { bucketName: 'leaveAttachments' });
     
     // Check if file exists
-    const files = await bucket.find({ _id: new mongoose.Types.ObjectId(fileId) }).toArray();
+    const files = await bucket.find({ _id: objectFileId }).toArray();
     if (files.length === 0) {
       return res.status(404).json({ message: 'File not found' });
     }
@@ -910,7 +951,7 @@ export const getAttachment = async (req, res) => {
     });
     
     // Stream file to response
-    const downloadStream = bucket.openDownloadStream(new mongoose.Types.ObjectId(fileId));
+    const downloadStream = bucket.openDownloadStream(objectFileId);
     downloadStream.pipe(res);
     
     downloadStream.on('error', (error) => {
