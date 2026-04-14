@@ -24,6 +24,10 @@ const upload = multer({
 const router = express.Router();
 
 // Admin routes (protected) - MUST come before /:slug route
+router.post('/upload-image', protect, upload.single('image'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
+  res.json({ url: req.file.path });
+});
 router.post('/', protect, upload.single('coverImage'), createBlog);
 router.put('/:id', protect, upload.single('coverImage'), updateBlog);
 router.delete('/:id', protect, deleteBlog);
