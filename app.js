@@ -77,9 +77,20 @@ app.use(cookieParser());
 
 
 
-// SIMPLE CORS: Only allow localhost:3000 with credentials for dev
+const ALLOWED_ORIGINS = [
+  process.env.CLIENT_URL,
+  process.env.LEAVE_PORTAL_URL,
+  'http://localhost:3000',
+  'http://localhost:3001',
+].filter(Boolean);
+
 app.use(cors({
-  origin: 'http://localhost:3000',
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, server-to-server)
+    if (!origin) return callback(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS: origin ${origin} not allowed`));
+  },
   credentials: true,
 }));
 
