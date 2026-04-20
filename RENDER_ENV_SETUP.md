@@ -1,15 +1,24 @@
 # How to Set Environment Variables in Render (IMPORTANT!)
 
+<<<<<<< HEAD
 ## ⚠️ CRITICAL: Each Variable Must Be On Its Own Line!
 
 In Render, environment variables must be set **one per line**, NOT all on one line!
 
 ## ❌ WRONG (Don't Do This):
+=======
+## IMPORTANT: Each Variable Must Be On Its Own Line
+
+In Render, environment variables must be set one per line, not all on one line.
+
+## Wrong:
+>>>>>>> a731252 (g)
 
 ```
 MONGODB_URI=... JWT_ACCESS_SECRET=... RESEND_API_KEY=... EMAIL_FROM=...
 ```
 
+<<<<<<< HEAD
 ## ✅ CORRECT (Do This):
     
 In Render Dashboard → Your Web Service → Environment, add each variable **separately**:
@@ -81,3 +90,41 @@ EMAIL_FROM=Paul Usoro & Co. <onboarding@resend.dev>
 3. Delete and re-add the variable, making sure it's on its own line
 4. Redeploy again
 
+=======
+## Correct:
+
+In Render Dashboard -> Your Web Service -> Environment, add each variable separately:
+
+```
+MONGODB_URI=<your-mongodb-uri>
+JWT_ACCESS_SECRET=<your-access-secret>
+JWT_REFRESH_SECRET=<your-refresh-secret>
+NODE_ENV=production
+CLIENT_URL=https://www.paulusoro.com
+CLOUDINARY_CLOUD_NAME=<your-cloudinary-cloud-name>
+CLOUDINARY_API_KEY=<your-cloudinary-api-key>
+CLOUDINARY_API_SECRET=<your-cloudinary-api-secret>
+CLOUDINARY_URL=cloudinary://<api-key>:<api-secret>@<cloud-name>
+JWT_SECRET=<your-jwt-secret>
+LEAVE_PORTAL_URL=https://paulusoro.com
+RESEND_API_KEY=<your-resend-api-key>
+RESEND_FROM=notifications@your-domain.com
+EMAIL_FROM=Your Org <notifications@your-domain.com>
+```
+
+## Step-by-step
+
+1. Open Render Dashboard.
+2. Open your Web Service.
+3. Open the Environment tab.
+4. Add each variable one at a time.
+5. Save.
+6. Redeploy.
+
+## Common mistakes
+
+- Putting all variables on one line.
+- Typos in key names.
+- Forgetting to redeploy after changes.
+- Extra spaces around `=`.
+>>>>>>> a731252 (g)

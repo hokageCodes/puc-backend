@@ -6,7 +6,7 @@ export const createDepartment = async (req, res) => {
     const department = await Department.create(req.body);
     res.status(201).json(department);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ message: 'Unable to create department.' });
   }
 };
 
@@ -20,7 +20,7 @@ export const createTeam = async (req, res) => {
     const team = await Team.create(req.body);
     res.status(201).json(team);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ message: 'Unable to create team.' });
   }
 };
 

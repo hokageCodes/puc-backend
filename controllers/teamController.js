@@ -5,6 +5,6 @@ export const getTeams = async (req, res) => {
     const teams = await Team.find().populate('department', 'name');
     res.json(teams);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to load teams', details: err.message });
+    res.status(500).json({ message: 'Failed to load teams.' });
   }
 };

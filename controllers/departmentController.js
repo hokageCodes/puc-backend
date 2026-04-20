@@ -6,6 +6,6 @@ export const getDepartments = async (req, res) => {
     res.json(departments);
   } catch (err) {
     console.error('❌ Failed to load departments:', err.message);
-    res.status(500).json({ error: 'Failed to load departments', details: err.message });
+    res.status(500).json({ message: 'Failed to load departments.' });
   }
 };

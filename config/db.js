@@ -17,8 +17,10 @@ const connectDB = async () => {
   if (!cached.promise) {
     const opts = {
       bufferCommands: true, // Changed to true for serverless - allows queuing commands while connecting
-      dbName: 'PUC',
     };
+    if (process.env.MONGODB_DB_NAME) {
+      opts.dbName = process.env.MONGODB_DB_NAME;
+    }
 
     cached.promise = mongoose.connect(process.env.MONGODB_URI, opts).then((mongoose) => {
       console.log(`✅ MongoDB connected to ${mongoose.connection.name}`);

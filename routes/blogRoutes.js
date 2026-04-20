@@ -1,7 +1,6 @@
-// routes/blogRoutes.js
 import express from 'express';
 import multer from 'multer';
-import { blogStorage } from '../config/cloudinary.js';
+import { uploadBuffer } from '../config/cloudinary.js';
 import {
   createBlog,
   updateBlog,
@@ -12,34 +11,112 @@ import {
   toggleBlogLike,
   getBlogLikeStatus
 } from '../controllers/blogController.js';
-import { protect } from '../middleware/auth.js';
+import { protect, requireRoles } from '../middleware/auth.js';
+import { validateBody } from '../middleware/validation.js';
 
-const upload = multer({ 
-  storage: blogStorage,
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+]);
+
+// Memory storage — we upload to Cloudinary manually after multer parses the file
+const upload = multer({
+  storage: multer.memoryStorage(),
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
-  }
+    fileSize: 10 * 1024 * 1024,  // 10MB per file
+    fieldSize: 20 * 1024 * 1024, // 20MB for large HTML content fields
+  },
+  fileFilter: (req, file, cb) => {
+    if (!ALLOWED_IMAGE_MIME_TYPES.has(file.mimetype)) {
+      return cb(new Error('Unsupported image type. Allowed: jpg, png, webp, gif'));
+    }
+    cb(null, true);
+  },
 });
+
+const handleUploadError = (err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ message: 'Image file too large. Maximum size is 10MB.' });
+    }
+    return res.status(400).json({ message: `Upload error: ${err.message}` });
+  }
+  if (err) {
+    console.error('Upload middleware error:', err);
+    return res.status(500).json({ message: err.message || 'Upload failed' });
+  }
+  next();
+};
+
+/**
+ * After multer puts the file in req.file.buffer, push it to Cloudinary.
+ * Attaches req.file.path (the CDN URL) so controllers work unchanged.
+ */
+const uploadToCloudinary = (folder) => async (req, res, next) => {
+  if (!req.file) return next();
+  try {
+    const result = await uploadBuffer(req.file.buffer, { folder, resource_type: 'image' });
+    req.file.path = result.secure_url;
+    req.file.public_id = result.public_id;
+    next();
+  } catch (err) {
+    console.error('Cloudinary upload error:', err);
+    return res.status(500).json({ message: `Image upload failed: ${err.message}` });
+  }
+};
 
 const router = express.Router();
 
-// Admin routes (protected) - MUST come before /:slug route
-router.post('/upload-image', protect, upload.single('image'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
-  res.json({ url: req.file.path });
-});
-router.post('/', protect, upload.single('coverImage'), createBlog);
-router.put('/:id', protect, upload.single('coverImage'), updateBlog);
-router.delete('/:id', protect, deleteBlog);
-router.get('/admin/all', protect, getAllBlogs); // Get all blogs with filters
+// Admin routes (protected) — MUST come before /:slug route
+router.post(
+  '/upload-image',
+  protect,
+  requireRoles('admin', 'cms'),
+  upload.single('image'),
+  handleUploadError,
+  uploadToCloudinary('puc-blog-inline'),
+  async (req, res) => {
+    if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
+    res.json({ url: req.file.path });
+  }
+);
+
+router.post(
+  '/',
+  protect,
+  requireRoles('admin', 'cms'),
+  upload.single('coverImage'),
+  handleUploadError,
+  uploadToCloudinary('puc-blog-covers'),
+  validateBody({
+    allowlist: ['title', 'slug', 'excerpt', 'author', 'coverImage', 'tags', 'content', 'status', 'scheduledAt', 'featured'],
+    required: ['title', 'slug', 'content'],
+  }),
+  createBlog
+);
+
+router.put(
+  '/:id',
+  protect,
+  requireRoles('admin', 'cms'),
+  upload.single('coverImage'),
+  handleUploadError,
+  uploadToCloudinary('puc-blog-covers'),
+  validateBody({ allowlist: ['title', 'slug', 'excerpt', 'author', 'coverImage', 'tags', 'content', 'status', 'scheduledAt', 'featured'] }),
+  updateBlog
+);
+
+router.delete('/:id', protect, requireRoles('admin', 'cms'), deleteBlog);
+router.get('/admin/all', protect, requireRoles('admin', 'cms'), getAllBlogs);
 router.get('/id/:id', protect, async (req, res) => {
-  // Get single blog by ID for admin
   const { getBlogById } = await import('../controllers/blogController.js');
   getBlogById(req, res);
 });
 
 // Public routes
-router.get('/public', getPublicBlogs); // Get only published blogs
+router.get('/public', getPublicBlogs);
 router.get('/:slug/like-status', getBlogLikeStatus);
 router.post('/:slug/like', toggleBlogLike);
 router.get('/:slug', getBlogBySlug);

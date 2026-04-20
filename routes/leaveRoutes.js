@@ -13,6 +13,7 @@ import {
   getAttachment,
 } from '../controllers/leaveController.js';
 import { requireAuth, ensureLeaveEnrolled, requireRoles } from '../middleware/auth.js';
+import { validateBody } from '../middleware/validation.js';
 
 const router = express.Router();
 
@@ -32,9 +33,10 @@ router.get('/types', listLeaveTypes);
 router.get('/balances', getMyBalances);
 router.get('/calendar', getCalendarData);
 
-// Configure multer for leave request attachments - using memory storage to get buffer
+// Configure multer for leave request attachments using memory storage.
+// Controller persists binary content to GridFS, so disk/cloud storage middleware must not intercept the buffer.
 const upload = multer({
-  storage: multer.memoryStorage(), // Store in memory so we can save to MongoDB
+  storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB for documents
   fileFilter: (req, file, cb) => {
     if (!ALLOWED_ATTACHMENT_MIME_TYPES.has(file.mimetype)) {
@@ -85,7 +87,15 @@ const handleCreateRequest = (req, res, next) => {
 };
 
 // Use custom middleware for POST /requests
-router.post('/requests', handleCreateRequest, createLeaveRequest);
+router.post(
+  '/requests',
+  handleCreateRequest,
+  validateBody({
+    allowlist: ['leaveTypeId', 'leaveType', 'startDate', 'endDate', 'halfDay', 'coveragePlan', 'handoverNotes', 'reason'],
+    required: ['leaveTypeId', 'startDate', 'endDate', 'reason'],
+  }),
+  createLeaveRequest
+);
 router.get('/requests', getMyRequests);
 
 // Route to download attachments from GridFS
@@ -93,7 +103,7 @@ router.get('/attachments/:fileId', getAttachment);
 
 router.get('/approvals', getPendingApprovals);
 router.get('/approvals/history', getMyApprovals);
-router.post('/requests/:id/approve', requireRoles('teamLead', 'lineManager', 'hr'), approveLeaveRequest);
-router.post('/requests/:id/reject', requireRoles('teamLead', 'lineManager', 'hr'), rejectLeaveRequest);
+router.post('/requests/:id/approve', requireRoles('teamLead', 'lineManager', 'hr'), validateBody({ allowlist: ['comment'] }), approveLeaveRequest);
+router.post('/requests/:id/reject', requireRoles('teamLead', 'lineManager', 'hr'), validateBody({ allowlist: ['comment'] }), rejectLeaveRequest);
 
 export default router;

@@ -48,6 +48,19 @@ const StaffSchema = new mongoose.Schema(
     lastLoginAt: { type: Date },
     lastLoginProvider: { type: String, enum: AUTH_PROVIDERS, default: 'local' },
     tokenVersion: { type: Number, default: 0 },
+    failedLoginAttempts: { type: Number, default: 0 },
+    lockUntil: { type: Date },
+    lastFailedLoginAt: { type: Date },
+    refreshTokens: [
+      {
+        scope: { type: String, enum: ['leave', 'cms'], required: true },
+        tokenHash: { type: String, required: true },
+        issuedAt: { type: Date, default: Date.now },
+        expiresAt: { type: Date, required: true },
+        revokedAt: { type: Date },
+        revocationReason: { type: String },
+      },
+    ],
   },
   {
     timestamps: true,
@@ -68,6 +81,10 @@ StaffSchema.set('toJSON', {
     delete ret.passwordResetToken;
     delete ret.passwordResetExpires;
     delete ret.tokenVersion;
+    delete ret.failedLoginAttempts;
+    delete ret.lockUntil;
+    delete ret.lastFailedLoginAt;
+    delete ret.refreshTokens;
     return ret;
   },
 });

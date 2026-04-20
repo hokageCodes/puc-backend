@@ -1,4 +1,12 @@
+import mongoose from 'mongoose';
+// Only allow these fields to be set by non-admins
+const STAFF_SAFE_FIELDS = [
+  'firstName', 'lastName', 'email', 'phoneNumber', 'position', 'bio', 'profilePhoto',
+  'department', 'team', 'practiceAreas', 'division', 'teamLeadId', 'lineManagerId', 'hrId',
+  'leaveEnabled', 'hireDate', 'confirmationDate', 'isVisible', 'employeeId'
+];
 import Staff from '../models/Staff.js';
+import { logAudit } from '../utils/auditLogger.js';
 import Counter from '../models/Counter.js';
 import { ALL_ROLES_SET, DEFAULT_ROLE } from '../config/rbac.js';
 
@@ -41,7 +49,8 @@ const normalizeDivision = (value) => {
 
 const normalizeObjectIdField = (value) => {
   if (!value || value === '') return undefined;
-  return value;
+  const normalized = String(value).trim();
+  return mongoose.Types.ObjectId.isValid(normalized) ? normalized : undefined;
 };
 
 const normalizeDate = (value) => {
@@ -49,6 +58,8 @@ const normalizeDate = (value) => {
   const dateValue = new Date(value);
   return Number.isNaN(dateValue.getTime()) ? undefined : dateValue;
 };
+
+const isValidObjectId = (value) => mongoose.Types.ObjectId.isValid(String(value || '').trim());
 
 const getNextStaffCode = async () => {
   await syncStaffCodeCounter();
@@ -120,7 +131,9 @@ export const getAllStaff = async (req, res) => {
   try {
     await ensureEmployeeIdIndex();
     await syncStaffCodeCounter();
+    // Only select non-sensitive fields
     const staffList = await Staff.find()
+      .select('firstName lastName email phoneNumber position bio profilePhoto department team practiceAreas division teamLeadId lineManagerId hrId leaveEnabled hireDate confirmationDate isVisible employeeId staffCode roles createdAt updatedAt')
       .sort({ staffCode: 1, createdAt: 1 })
       .populate('department', 'name')
       .populate('team', 'name')
@@ -157,7 +170,12 @@ export const getPublicStaff = async (req, res) => {
 // Public endpoint: GET /api/public/staff/:id
 export const getPublicStaffById = async (req, res) => {
   try {
-    const staff = await Staff.findOne({ _id: req.params.id, isVisible: { $ne: false } })
+    const staffId = String(req.params.id || '').trim();
+    if (!isValidObjectId(staffId)) {
+      return res.status(400).json({ error: 'Invalid staff id' });
+    }
+
+    const staff = await Staff.findOne({ _id: staffId, isVisible: { $ne: false } })
       .select('firstName lastName position profilePhoto bio email phoneNumber practiceAreas department team staffCode')
       .populate('department', 'name')
       .populate('team', 'name')
@@ -179,16 +197,22 @@ export const getPublicStaffById = async (req, res) => {
 // GET /api/staff/:id
 export const getStaffById = async (req, res) => {
   try {
+    const staffId = String(req.params.id || '').trim();
+    if (!isValidObjectId(staffId)) {
+      return res.status(400).json({ error: 'Invalid staff id' });
+    }
+
     await ensureEmployeeIdIndex();
     await syncStaffCodeCounter();
 
-    let staff = await Staff.findById(req.params.id)
+    let staff = await Staff.findById(staffId)
+      .select('firstName lastName email phoneNumber position bio profilePhoto department team practiceAreas division teamLeadId lineManagerId hrId leaveEnabled hireDate confirmationDate isVisible employeeId staffCode roles createdAt updatedAt')
       .populate('department', 'name')
       .populate('team', 'name')
       .populate('practiceAreas', 'name')
       .populate('teamLeadId', 'firstName lastName staffCode')
       .populate('lineManagerId', 'firstName lastName staffCode')
-      .populate('hrId', 'firstName lastName staffCode'); // ✅ Ensure this is included
+      .populate('hrId', 'firstName lastName staffCode');
 
     if (!staff) return res.status(404).json({ error: 'Staff not found' });
 
@@ -203,10 +227,18 @@ export const getStaffById = async (req, res) => {
 
 export const createStaff = async (req, res) => {
   try {
-    const data = req.body;
-
     await ensureEmployeeIdIndex();
     await syncStaffCodeCounter();
+
+    // RBAC: Only admins can set roles or sensitive fields
+    const data = req.body;
+    const isAdmin = req.user.roles && req.user.roles.includes('admin');
+    let allowedFields = { ...data };
+    if (!isAdmin) {
+      Object.keys(allowedFields).forEach((key) => {
+        if (!STAFF_SAFE_FIELDS.includes(key)) delete allowedFields[key];
+      });
+    }
 
     const profilePhotoUrl = req.file?.path;
 
@@ -224,7 +256,7 @@ export const createStaff = async (req, res) => {
       confirmationDate,
       staffCode, // ignore manual override
       ...rest
-    } = data;
+    } = allowedFields;
 
     if (rest.employeeId === '' || rest.employeeId === null) {
       delete rest.employeeId;
@@ -265,14 +297,12 @@ export const createStaff = async (req, res) => {
       ...(normalizedTeamLeadId ? { teamLeadId: normalizedTeamLeadId } : {}),
       ...(normalizedLineManagerId ? { lineManagerId: normalizedLineManagerId } : {}),
       ...(normalizedHrId ? { hrId: normalizedHrId } : {}),
-      profilePhoto: profilePhotoUrl,
+      ...(profilePhotoUrl ? { profilePhoto: profilePhotoUrl } : {}),
       isVisible: visibilityValue,
-      staffCode: await getNextStaffCode(),
     });
 
-    await newStaff.save();
-
-    const populated = await Staff.findById(newStaff._id)
+    const saved = await newStaff.save();
+    const populated = await Staff.findById(saved._id)
       .populate('department', 'name')
       .populate('team', 'name')
       .populate('practiceAreas', 'name')
@@ -280,6 +310,13 @@ export const createStaff = async (req, res) => {
       .populate('lineManagerId', 'firstName lastName staffCode')
       .populate('hrId', 'firstName lastName staffCode');
 
+    logAudit('CREATE_STAFF', {
+      user: req.user?.id,
+      userEmail: req.user?.email,
+      staffId: populated._id,
+      staffEmail: populated.email,
+      ip: req.ip,
+    });
     res.status(201).json(populated);
   } catch (err) {
     console.error('❌ Staff creation failed:', err);
@@ -296,9 +333,23 @@ export const createStaff = async (req, res) => {
 // PUT /api/staff/:id
 export const updateStaff = async (req, res) => {
   try {
-    const data = req.body;
-    const id = req.params.id;
+    await ensureEmployeeIdIndex();
+    await syncStaffCodeCounter();
 
+    // RBAC: Only admins can set roles or sensitive fields
+    const data = req.body;
+    const isAdmin = req.user.roles && req.user.roles.includes('admin');
+    let allowedFields = { ...data };
+    if (!isAdmin) {
+      Object.keys(allowedFields).forEach((key) => {
+        if (!STAFF_SAFE_FIELDS.includes(key)) delete allowedFields[key];
+      });
+    }
+
+    const id = String(req.params.id || '').trim();
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ error: 'Invalid staff id' });
+    }
     const profilePhotoUrl = req.file?.path;
 
     let {
@@ -316,10 +367,7 @@ export const updateStaff = async (req, res) => {
       confirmationDate,
       staffCode, // ignore immutable field
       ...rest
-    } = data;
-
-    await ensureEmployeeIdIndex();
-    await syncStaffCodeCounter();
+    } = allowedFields;
 
     const parsedVisible = parseBoolean(rest.isVisible, undefined);
     delete rest.isVisible;
@@ -464,6 +512,13 @@ export const updateStaff = async (req, res) => {
 
     const ensuredDoc = await ensureStaffCode(populatedDoc);
 
+    logAudit('UPDATE_STAFF', {
+      user: req.user?.id,
+      userEmail: req.user?.email,
+      staffId: ensuredDoc._id,
+      staffEmail: ensuredDoc.email,
+      ip: req.ip,
+    });
     res.json(ensuredDoc);
   } catch (err) {
     console.error('❌ Staff update failed:', err);
@@ -474,8 +529,20 @@ export const updateStaff = async (req, res) => {
 // DELETE /api/staff/:id
 export const deleteStaff = async (req, res) => {
   try {
-    const deleted = await Staff.findByIdAndDelete(req.params.id);
+    const staffId = String(req.params.id || '').trim();
+    if (!isValidObjectId(staffId)) {
+      return res.status(400).json({ error: 'Invalid staff id' });
+    }
+
+    const deleted = await Staff.findByIdAndDelete(staffId);
     if (!deleted) return res.status(404).json({ error: 'Staff not found' });
+    logAudit('DELETE_STAFF', {
+      user: req.user?.id,
+      userEmail: req.user?.email,
+      staffId: deleted._id,
+      staffEmail: deleted.email,
+      ip: req.ip,
+    });
     res.json({ message: 'Staff deleted successfully' });
   } catch (err) {
     res.status(500).json({ error: 'Error deleting staff', details: err.message });

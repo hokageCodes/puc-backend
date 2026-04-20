@@ -43,10 +43,12 @@ export const login = async (req, res) => {
     const token = jwt.sign(tokenPayload, getAccessSecret(), { expiresIn: '24h' });
 
     // Enhanced cookie configuration for production
+
+    // Force dev-friendly cookie for localhost
     const cookieOptions = {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      secure: false, // Always false for localhost dev
+      sameSite: 'lax', // Always lax for localhost dev
       maxAge: 24 * 60 * 60 * 1000, // 24 hours in milliseconds
       path: '/',
     };

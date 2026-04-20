@@ -53,8 +53,8 @@ const LeaveRequestSchema = new mongoose.Schema(
     durationDays: { type: Number, required: true },
     halfDay: { type: String, enum: ['first', 'second'] },
     coveragePlan: { type: String, enum: ['handover', 'delegated', 'pending', ''] },
-    handoverNotes: { type: String },
-    reason: { type: String, required: true },
+    handoverNotes: { type: String, maxlength: 2000 },
+    reason: { type: String, required: true, maxlength: 1000 },
     attachments: [AttachmentSchema],
     status: {
       type: String,

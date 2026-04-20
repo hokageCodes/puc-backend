@@ -1,4 +1,5 @@
 // server.js - FIXED VERSION
+import { protect, requireRoles, requireAuth } from './middleware/auth.js';
 import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
@@ -9,6 +10,7 @@ import { v2 as cloudinary } from 'cloudinary';
 import connectDB from './config/db.js';
 
 import blogRoutes from './routes/blogRoutes.js';
+
 import staffRoutes from './routes/staffRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
 import departmentRoutes from './routes/departmentRoutes.js';
@@ -16,7 +18,27 @@ import teamRoutes from './routes/teamRoutes.js';
 import practiceAreaRoutes from './routes/practiceAreaRoutes.js';
 import authRoutes from './routes/authRoutes.js';
 import leaveRoutes from './routes/leaveRoutes.js';
-import { requireAuth, requireRoles } from './middleware/auth.js';
+
+
+import rateLimit from 'express-rate-limit';
+
+
+// Initialize app BEFORE any app.use/app.get
+const app = express();
+
+// Rate limiting middleware (100 requests per 15 minutes per IP)
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Too many requests, please try again later.'
+  }
+});
+
+// Apply to all API routes
+app.use('/api/', apiLimiter);
 
 // Load environment variables FIRST
 dotenv.config();
@@ -48,63 +70,18 @@ connectDB().catch((err) => {
   console.error('Failed to connect to MongoDB:', err);
 });
 
-const app = express();
+
 
 // Cookie parser MUST come before CORS and routes
 app.use(cookieParser());
 
-// CORS configuration
-const corsOptions = {
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
 
-    const allowedOrigins = [
-      'https://paulusoro.com',
-      'https://www.paulusoro.com',
-      'http://localhost:3000',
-      'http://localhost:3001',
-      'http://localhost:3002',
-      'https://localhost:3000',
-      'https://localhost:3001',
-      'https://localhost:3002',
-      process.env.CLIENT_URL,
-      // Vercel URLs
-      process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null,
-      process.env.VERCEL_BRANCH_URL ? `https://${process.env.VERCEL_BRANCH_URL}` : null,
-      process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null
-    ].filter(Boolean);
 
-    const isLocalhost = origin && (
-      origin.startsWith('http://localhost') || 
-      origin.startsWith('https://localhost') || 
-      origin.startsWith('http://127.0.0.1') ||
-      origin.startsWith('https://127.0.0.1')
-    );
-
-    const isAllowed = allowedOrigins.includes(origin) || isLocalhost;
-
-    console.log('CORS check - Origin:', origin, 'isLocalhost:', isLocalhost, 'allowed:', isAllowed);
-
-    if (isAllowed) {
-      callback(null, true);
-    } else {
-      console.log('Blocked by CORS:', origin);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+// SIMPLE CORS: Only allow localhost:3000 with credentials for dev
+app.use(cors({
+  origin: 'http://localhost:3000',
   credentials: true,
-  optionsSuccessStatus: 200,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: [
-    'Content-Type', 
-    'Authorization', 
-    'X-Requested-With',
-    'Accept',
-    'Origin'
-  ]
-};
-
-app.use(cors(corsOptions));
+}));
 
 // FIXED: Proper conditional body parsing middleware
 // Skip body parsing entirely for multipart/form-data - multer will handle it
@@ -148,18 +125,37 @@ app.use(async (req, res, next) => {
 
 // Request logging
 app.use((req, res, next) => {
+  const hasCookie = !!req.cookies.admin_token;
+  const hasBearer = req.headers.authorization?.startsWith('Bearer ');
   console.log(`${req.method} ${req.path}`, {
     origin: req.headers.origin,
-    userAgent: req.headers['user-agent']?.substring(0, 50) + '...',
-    hasAuthToken: !!req.cookies.admin_token,
+    auth: hasCookie ? 'cookie' : hasBearer ? 'bearer' : 'none',
   });
   next();
 });
 
-// Serve static files
-app.use('/uploads', express.static('uploads'));
-// Also serve leave attachments
-app.use('/api/uploads', express.static('uploads'));
+
+// SECURE FILE DOWNLOAD ENDPOINT (RBAC enforced)
+import path from 'path';
+import fs from 'fs';
+// Only allow admins, CMS, or the file owner to download
+app.get('/api/secure-download/:filename', protect, requireRoles('admin', 'cms'), (req, res) => {
+  const { filename } = req.params;
+  // Prevent path traversal
+  if (!/^[a-zA-Z0-9_.-]+$/.test(filename)) {
+    return res.status(400).json({ message: 'Invalid filename' });
+  }
+  const filePath = path.join(process.cwd(), 'uploads', filename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ message: 'File not found' });
+  }
+  res.download(filePath, filename, (err) => {
+    if (err) {
+      console.error('File download error:', err);
+      res.status(500).json({ message: 'Error downloading file' });
+    }
+  });
+});
 
 // API routes
 // Public staff endpoints (no auth) - used by public site to render team members

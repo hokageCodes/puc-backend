@@ -4,6 +4,7 @@ import LeaveBalance from '../models/LeaveBalance.js';
 import LeaveRequest from '../models/LeaveRequest.js';
 import Staff from '../models/Staff.js';
 import { sendEmail } from '../utils/email.js';
+import { logAudit } from '../utils/auditLogger.js';
 import {
   buildLeaveRequestNotificationEmail,
   buildLeaveApprovedEmail,
@@ -11,6 +12,18 @@ import {
 } from '../utils/email.js';
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
+const normalizeString = (value) => (typeof value === 'string' ? value.trim() : '');
+const toObjectIdOrNull = (value) => {
+  const normalized = String(value || '').trim();
+  return mongoose.Types.ObjectId.isValid(normalized) ? new mongoose.Types.ObjectId(normalized) : null;
+};
+
+const parsePagination = (query, defaultLimit = 50) => {
+  const page = Math.max(parseInt(query.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(query.limit, 10) || defaultLimit, 1), 200);
+  const skip = (page - 1) * limit;
+  return { page, limit, skip };
+};
 
 const currentPeriod = (date = new Date()) => {
   const year = date.getUTCFullYear();
@@ -42,7 +55,8 @@ const calculateDurationDays = (startDate, endDate, halfDay) => {
   return base;
 };
 
-const ensureLeaveBalance = async (staffId, leaveType, period) => {
+const ensureLeaveBalance = async (staffId, leaveType, period, options = {}) => {
+  const { session } = options;
   if (!period || isNaN(period) || period === null) {
     throw new Error('Invalid period value. Cannot create leave balance.');
   }
@@ -63,7 +77,7 @@ const ensureLeaveBalance = async (staffId, leaveType, period) => {
           pending: 0,
         },
       },
-      { new: true, upsert: true }
+      { new: true, upsert: true, session }
     );
 
     return balance;
@@ -73,7 +87,7 @@ const ensureLeaveBalance = async (staffId, leaveType, period) => {
         staff: staffId,
         leaveType: leaveType._id,
         period,
-      });
+      }).session(session || null);
       
       if (!existingBalance) {
         existingBalance = await LeaveBalance.findOne({
@@ -83,13 +97,13 @@ const ensureLeaveBalance = async (staffId, leaveType, period) => {
             { period },
             { year: period },
           ],
-        });
+        }).session(session || null);
       }
       
       if (existingBalance) {
         if (!existingBalance.period && existingBalance.year) {
           existingBalance.period = existingBalance.year;
-          await existingBalance.save();
+          await existingBalance.save({ session });
         }
         return existingBalance;
       }
@@ -105,7 +119,7 @@ const ensureLeaveBalance = async (staffId, leaveType, period) => {
               pending: 0,
             },
           },
-          { new: true, upsert: true }
+          { new: true, upsert: true, session }
         );
         return retryBalance;
       } catch (retryError) {
@@ -117,23 +131,28 @@ const ensureLeaveBalance = async (staffId, leaveType, period) => {
   }
 };
 
-const adjustBalancePending = async ({ staffId, leaveTypeId, period, amount }) => {
-  return;
-};
-
-const adjustBalanceOnFinalApproval = async ({ staffId, leaveTypeId, period, duration }) => {
+const adjustBalancePending = async ({ staffId, leaveTypeId, period, amount, session }) => {
   await LeaveBalance.updateOne(
     { staff: staffId, leaveType: leaveTypeId, period },
-    {
-      $inc: {
-        used: duration,
-      },
-    }
+    { $inc: { pending: amount } },
+    { session }
   );
 };
 
-const adjustBalanceOnRejection = async ({ staffId, leaveTypeId, period, duration }) => {
-  return;
+const adjustBalanceOnFinalApproval = async ({ staffId, leaveTypeId, period, duration, session }) => {
+  await LeaveBalance.updateOne(
+    { staff: staffId, leaveType: leaveTypeId, period },
+    { $inc: { used: duration, pending: -duration } },
+    { session }
+  );
+};
+
+const adjustBalanceOnRejection = async ({ staffId, leaveTypeId, period, duration, session }) => {
+  await LeaveBalance.updateOne(
+    { staff: staffId, leaveType: leaveTypeId, period },
+    { $inc: { pending: -duration } },
+    { session }
+  );
 };
 
 const buildApproverChain = (staffDoc) => {
@@ -175,69 +194,63 @@ const appendTimeline = (request, event, actorId, note) => {
 };
 
 export const listLeaveTypes = async (req, res) => {
-  const types = await LeaveType.find({ isActive: true }).sort({ name: 1 }).lean();
-  res.json(types);
+  try {
+    const types = await LeaveType.find({ isActive: true }).sort({ name: 1 }).lean();
+    res.json(types);
+  } catch (err) {
+    console.error('listLeaveTypes error:', err);
+    res.status(500).json({ message: 'Failed to load leave types.' });
+  }
 };
 
 export const getMyBalances = async (req, res) => {
-  const period = currentPeriod();
-  const staffId = req.user.id;
-  const types = await LeaveType.find({ isActive: true }).lean();
+  try {
+    const period = currentPeriod();
+    const staffId = req.user.id;
+    const types = await LeaveType.find({ isActive: true }).lean();
+    const typeIds = types.map((t) => t._id);
 
-  const balances = await Promise.all(
-    types.map(async (type) => {
-      const balance = await ensureLeaveBalance(staffId, type, period);
-      return {
-        type: {
-          id: type._id,
-          name: type.name,
-          code: type.code,
-        },
-        period: balance.period,
-        allocated: balance.allocated,
-        carriedOver: balance.carriedOver,
-        used: balance.used,
-        pending: balance.pending,
-        remaining: balance.allocated + balance.carriedOver - balance.used,
-      };
-    })
-  );
+    // Bulk fetch — one query instead of N
+    const existingBalances = await LeaveBalance.find({
+      staff: staffId,
+      period,
+      leaveType: { $in: typeIds },
+    }).lean();
 
-  res.json(balances);
+    const balanceMap = new Map(existingBalances.map((b) => [b.leaveType.toString(), b]));
+
+    const balances = await Promise.all(
+      types.map(async (type) => {
+        const balance = balanceMap.get(type._id.toString()) ?? await ensureLeaveBalance(staffId, type, period);
+        return {
+          type: { id: type._id, name: type.name, code: type.code },
+          period: balance.period,
+          allocated: balance.allocated,
+          carriedOver: balance.carriedOver,
+          used: balance.used,
+          pending: balance.pending,
+          remaining: balance.allocated + balance.carriedOver - balance.used,
+        };
+      })
+    );
+
+    res.json(balances);
+  } catch (err) {
+    console.error('getMyBalances error:', err);
+    res.status(500).json({ message: 'Failed to load leave balances.' });
+  }
 };
 
 export const createLeaveRequest = async (req, res) => {
+  let uploadedFileId = null; // track for cleanup on failure
+
   try {
-    console.log('📥 CREATE REQUEST START');
-    console.log('📥 Content-Type:', req.headers['content-type']);
-    console.log('📥 Has file:', !!req.file);
-    console.log('📥 Body:', req.body);
-    console.log('📥 Body keys:', req.body ? Object.keys(req.body) : 'body is null/undefined');
-    
-    if (req.file) {
-      console.log('📥 File details:', {
-        fieldname: req.file.fieldname,
-        originalname: req.file.originalname,
-        mimetype: req.file.mimetype,
-        size: req.file.size,
-        hasBuffer: !!req.file.buffer,
-        bufferLength: req.file.buffer?.length,
-      });
-    }
-    
-    // For multipart/form-data, req.body should be populated by multer
-    // Check if body exists (it should after multer processes the request)
     if (!req.body) {
-      console.error('❌ req.body is null/undefined after multer');
-      console.error('❌ This might be a multer configuration issue');
-      return res.status(400).json({ 
-        message: 'Request body is missing. Please ensure form data is properly formatted.',
-      });
+      return res.status(400).json({ message: 'Request body is missing.' });
     }
-    
+
     const body = req.body;
-    
-    const leaveTypeId = body.leaveTypeId || body.leaveType;
+    const leaveTypeId = normalizeString(body.leaveTypeId || body.leaveType);
     const startDate = body.startDate;
     const endDate = body.endDate;
     const halfDay = body.halfDay;
@@ -245,23 +258,13 @@ export const createLeaveRequest = async (req, res) => {
     const handoverNotes = body.handoverNotes;
     const reason = body.reason;
 
-    console.log('📥 Extracted fields:', { leaveTypeId, startDate, endDate, reason: !!reason });
-
     if (!leaveTypeId || !startDate || !endDate || !reason) {
-      return res.status(400).json({ 
-        message: 'Leave type, dates, and reason are required.',
-        received: { 
-          leaveTypeId: !!leaveTypeId, 
-          startDate: !!startDate, 
-          endDate: !!endDate, 
-          reason: !!reason 
-        },
-      });
+      return res.status(400).json({ message: 'Leave type, dates, and reason are required.' });
     }
 
     // Try to resolve leaveTypeId which may be an ObjectId or a string key/name/code
     let leaveType = null;
-    if (mongoose.Types.ObjectId.isValid(String(leaveTypeId))) {
+    if (mongoose.Types.ObjectId.isValid(leaveTypeId)) {
       leaveType = await LeaveType.findById(leaveTypeId);
     }
 
@@ -286,157 +289,119 @@ export const createLeaveRequest = async (req, res) => {
     }
 
     const durationDays = calculateDurationDays(startDate, endDate, halfDay);
-    
+
     const startDateObj = new Date(startDate);
     if (isNaN(startDateObj.getTime())) {
       return res.status(400).json({ message: 'Invalid start date provided.' });
     }
-    
+
     const period = currentPeriod(startDateObj);
     if (!period || isNaN(period)) {
       return res.status(400).json({ message: 'Invalid period calculated from start date.' });
     }
 
-    await ensureLeaveBalance(staff._id, leaveType, period);
-
     const approverChain = buildApproverChain(staff);
     const status = deriveStatusFromChain(approverChain);
 
-    // Handle file upload to GridFS - INITIALIZE EMPTY ARRAY FIRST
+    // Upload file to GridFS before the transaction. Track the fileId so we can
+    // delete it if the transaction later fails (overlap conflict etc.).
     const attachments = [];
-    
+
     if (req.file && req.file.buffer) {
-      console.log('📎 START: Processing file upload to GridFS');
-      console.log('📎 Buffer size:', req.file.buffer.length);
-      
-      try {
-        // Check MongoDB connection
-        if (!mongoose.connection.db) {
-          console.error('❌ MongoDB not connected');
-          throw new Error('Database connection not established');
-        }
-        
-        const GridFSBucket = mongoose.mongo.GridFSBucket;
-        const db = mongoose.connection.db;
-        const bucket = new GridFSBucket(db, { bucketName: 'leaveAttachments' });
-        
-        // Generate unique filename
-        const timestamp = Date.now();
-        const randomSuffix = Math.round(Math.random() * 1E9);
-        const fileName = req.file.originalname || 'attachment';
-        const gridFilename = `${timestamp}-${randomSuffix}-${fileName}`;
-        
-        console.log('📎 Creating upload stream:', gridFilename);
-        
-        // Create upload stream with metadata
-        const uploadStream = bucket.openUploadStream(gridFilename, {
-          contentType: req.file.mimetype,
-          metadata: {
-            originalName: req.file.originalname,
-            uploadedBy: req.user.id,
-            uploadedAt: new Date(),
-          },
-        });
-        
-        console.log('📎 Upload stream created, writing buffer...');
-        
-        // Upload file using Promise
-        const fileId = await new Promise((resolve, reject) => {
-          // Error handler - MUST be set before writing
-          uploadStream.on('error', (error) => {
-            console.error('❌ Upload stream error:', error);
-            reject(error);
-          });
-          
-          // Finish handler - called when upload completes
-          uploadStream.on('finish', () => {
-            console.log('✅ Upload stream finished');
-            console.log('✅ File ID:', uploadStream.id.toString());
-            resolve(uploadStream.id);
-          });
-          
-          // Write buffer and end stream
-          console.log('📎 Writing buffer to stream...');
-          uploadStream.write(req.file.buffer);
-          uploadStream.end();
-          console.log('📎 Stream ended, waiting for finish event...');
-        });
-        
-        console.log('✅ Upload completed successfully');
-        console.log('✅ File ID:', fileId.toString());
-        
-        // Create attachment object - THIS IS THE KEY PART
-        const attachmentDoc = {
-          fileId: fileId,
-          filename: req.file.originalname || 'attachment',
-          mimetype: req.file.mimetype,
-          size: req.file.size,
-          uploadedAt: new Date(),
-        };
-        
-        // IMPORTANT: Push to array BEFORE creating document
-        attachments.push(attachmentDoc);
-        
-        console.log('✅ Attachment object created and added to array:', {
-          fileId: fileId.toString(),
-          filename: attachmentDoc.filename,
-          size: attachmentDoc.size,
-          arrayLength: attachments.length,
-        });
-        
-      } catch (gridError) {
-        console.error('❌ GridFS Error:', {
-          message: gridError.message,
-          stack: gridError.stack,
-          name: gridError.name,
-        });
-        // Continue without failing the entire request
-        console.error('❌ Continuing without attachment');
+      if (!mongoose.connection.db) {
+        return res.status(503).json({ message: 'Database connection not established.' });
       }
-    } else {
-      console.log('ℹ️ No file to upload');
+
+      const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'leaveAttachments' });
+      const safeOriginalName = (req.file.originalname || 'attachment').replace(/[^\w.\-]/g, '_');
+      const gridFilename = `${Date.now()}-${Math.random().toString(36).slice(2)}-${safeOriginalName}`;
+
+      const uploadStream = bucket.openUploadStream(gridFilename, {
+        contentType: req.file.mimetype,
+        metadata: { originalName: safeOriginalName, uploadedBy: req.user.id, uploadedAt: new Date() },
+      });
+
+      const fileId = await new Promise((resolve, reject) => {
+        uploadStream.on('error', reject);
+        uploadStream.on('finish', () => resolve(uploadStream.id));
+        uploadStream.write(req.file.buffer);
+        uploadStream.end();
+      });
+
+      uploadedFileId = fileId; // track for cleanup
+      attachments.push({
+        fileId,
+        filename: safeOriginalName,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        uploadedAt: new Date(),
+      });
     }
-    
-    console.log('📎 Final attachments array before save:', {
-      length: attachments.length,
-      data: attachments,
-    });
 
-    // Create leave request - attachments array is now populated
-    const leaveRequest = new LeaveRequest({
-      staff: staff._id,
-      leaveType: leaveType._id,
-      startDate,
-      endDate,
-      durationDays,
-      halfDay: halfDay || undefined,
-      coveragePlan: coveragePlan || undefined,
-      handoverNotes: handoverNotes || undefined,
-      reason: reason.trim(),
-      attachments: attachments, // This should now contain the attachment
-      approverChain,
-      status,
-      createdBy: req.user.id,
-    });
+    const session = await mongoose.startSession();
+    let leaveRequest;
+    try {
+      await session.withTransaction(async () => {
+        // Lock the staff row to serialize concurrent requests from the same user.
+        await Staff.updateOne({ _id: staff._id }, { $set: { updatedAt: new Date() } }, { session });
 
-    appendTimeline(leaveRequest, 'submitted', req.user.id, undefined);
+        // Standard date-overlap check (single condition covers all cases).
+        const overlap = await LeaveRequest.findOne({
+          staff: staff._id,
+          status: { $nin: ['rejected', 'cancelled'] },
+          startDate: { $lte: endDate },
+          endDate: { $gte: startDate },
+        }).session(session);
 
-    console.log('💾 Saving leave request with attachments:', {
-      attachmentsCount: leaveRequest.attachments.length,
-      attachments: leaveRequest.attachments,
-    });
-    
-    await leaveRequest.save();
-    console.log('💾 Leave request saved with ID:', leaveRequest._id);
-    
-    // Verify what was actually saved
-    const savedRequest = await LeaveRequest.findById(leaveRequest._id).lean();
-    console.log('💾 VERIFICATION - Saved to DB:', {
-      id: savedRequest._id,
-      attachmentsCount: savedRequest.attachments?.length || 0,
-      attachments: savedRequest.attachments,
-    });
-    
+        if (overlap) throw new Error('OVERLAP_CONFLICT');
+
+        await ensureLeaveBalance(staff._id, leaveType, period, { session });
+
+        // Mark days as pending so subsequent requests see reduced availability.
+        await adjustBalancePending({
+          staffId: staff._id,
+          leaveTypeId: leaveType._id,
+          period,
+          amount: durationDays,
+          session,
+        });
+
+        leaveRequest = new LeaveRequest({
+          staff: staff._id,
+          leaveType: leaveType._id,
+          startDate,
+          endDate,
+          durationDays,
+          halfDay: halfDay || undefined,
+          coveragePlan: coveragePlan || undefined,
+          handoverNotes: handoverNotes ? handoverNotes.trim() : undefined,
+          reason: reason.trim(),
+          attachments,
+          approverChain,
+          status,
+          createdBy: req.user.id,
+        });
+
+        appendTimeline(leaveRequest, 'submitted', req.user.id, undefined);
+        await leaveRequest.save({ session });
+      });
+    } catch (txErr) {
+      // Transaction failed — delete orphaned GridFS file if one was uploaded.
+      if (uploadedFileId) {
+        try {
+          const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'leaveAttachments' });
+          await bucket.delete(uploadedFileId);
+        } catch { /* best-effort */ }
+      }
+      throw txErr;
+    } finally {
+      session.endSession();
+    }
+
+    if (!leaveRequest?._id) {
+      throw new Error('Unable to create leave request.');
+    }
+
     await leaveRequest.populate([{ path: 'leaveType', select: 'name code' }]);
 
     // Send email notification
@@ -453,7 +418,7 @@ export const createLeaveRequest = async (req, res) => {
               html: emailContent.html, 
               text: emailContent.text 
             });
-            console.log(`✅ Email sent to ${approver.email}`);
+            // Email sent to ${approver.email}
           }
         } else if (firstApprover.role === 'hr' && !firstApprover.assignee) {
           const hrUsers = await Staff.find({ roles: 'hr' }).select('firstName lastName email').lean();
@@ -466,48 +431,94 @@ export const createLeaveRequest = async (req, res) => {
               html: emailContent.html, 
               text: emailContent.text 
             });
-            console.log(`✅ Email sent to HR (${hrUser.email})`);
+            // Email sent to HR (${hrUser.email})
           }
         }
       }
     } catch (emailError) {
       console.error('Failed to send notification email:', emailError);
+      await logAudit('EMAIL_SEND_FAILURE', {
+        req,
+        event: 'leave-request-notification',
+        error: emailError?.message || emailError,
+        leaveRequestId: leaveRequest?._id?.toString?.(),
+        staffId: staff?._id?.toString?.(),
+        to: (firstApprover?.assignee && approver?.email) || undefined,
+      });
     }
 
-    console.log('✅ CREATE REQUEST COMPLETE');
+    await logAudit('LEAVE_REQUEST_CREATE', {
+      req,
+      leaveRequestId: leaveRequest._id.toString(),
+      staffId: staff._id.toString(),
+      leaveTypeId: leaveType._id.toString(),
+      status: leaveRequest.status,
+    });
     res.status(201).json(leaveRequest);
     
   } catch (error) {
-    console.error('❌ CREATE REQUEST ERROR:', error);
-    console.error('❌ Error stack:', error.stack);
-    
-    let errorMessage = 'Unable to create leave request. Please try again.';
-    let statusCode = 400;
-    
-    if (error.code === 11000 || error.code === 11001) {
-      errorMessage = 'A temporary conflict occurred. Please try submitting again.';
-    } else if (error.message) {
-      errorMessage = error.message;
-    } else if (error.name === 'ValidationError') {
-      errorMessage = 'Validation error: ' + Object.values(error.errors).map(e => e.message).join(', ');
+    console.error('createLeaveRequest error:', error.message);
+
+    if (error.message === 'OVERLAP_CONFLICT') {
+      return res.status(409).json({ message: 'You already have a leave request that overlaps with these dates.' });
     }
-    
-    res.status(statusCode).json({ message: errorMessage });
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ message: Object.values(error.errors).map((e) => e.message).join(', ') });
+    }
+    if (error.code === 11000 || error.code === 11001) {
+      return res.status(409).json({ message: 'A temporary conflict occurred. Please try submitting again.' });
+    }
+    res.status(500).json({ message: 'Unable to create leave request. Please try again.' });
   }
 };
 
 export const getMyRequests = async (req, res) => {
-  const requests = await LeaveRequest.find({ staff: req.user.id })
-    .populate('leaveType', 'name code')
-    .populate({ path: 'approverChain.assignee', select: 'firstName lastName email' })
-    .sort({ createdAt: -1 })
-    .lean();
-  res.json(requests);
+  try {
+    const { page, limit, skip } = parsePagination(req.query);
+    const filter = { staff: req.user.id };
+    const [requests, total] = await Promise.all([
+      LeaveRequest.find(filter)
+        .select('-__v -timeline -updatedBy')
+        .populate('leaveType', 'name code')
+        .populate({ path: 'approverChain.assignee', select: 'firstName lastName email' })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      LeaveRequest.countDocuments(filter),
+    ]);
+
+    const safeRequests = requests.map((r) => {
+      if (Array.isArray(r.attachments)) {
+        r.attachments = r.attachments.map((a) => ({
+          fileId: a.fileId,
+          filename: a.filename,
+          mimetype: a.mimetype,
+          size: a.size,
+          uploadedAt: a.uploadedAt,
+        }));
+      }
+      return r;
+    });
+
+    res.set('X-Total-Count', String(total));
+    res.set('X-Total-Pages', String(Math.ceil(total / limit)));
+    res.set('X-Page', String(page));
+    res.set('X-Limit', String(limit));
+    res.json(safeRequests);
+  } catch (err) {
+    console.error('getMyRequests error:', err);
+    res.status(500).json({ message: 'Failed to load leave requests.' });
+  }
 };
 
 const buildApproverMatchConditions = (user) => {
   const conditions = [];
   const roles = new Set(user.roles || []);
+  const approverId = toObjectIdOrNull(user.id);
+  if (!approverId) {
+    return conditions;
+  }
 
   if (roles.has('teamLead')) {
     conditions.push({
@@ -516,7 +527,7 @@ const buildApproverMatchConditions = (user) => {
         $elemMatch: {
           role: 'teamLead',
           status: 'pending',
-          assignee: new mongoose.Types.ObjectId(user.id),
+          assignee: approverId,
         },
       },
     });
@@ -529,7 +540,7 @@ const buildApproverMatchConditions = (user) => {
         $elemMatch: {
           role: 'lineManager',
           status: 'pending',
-          assignee: new mongoose.Types.ObjectId(user.id),
+          assignee: approverId,
         },
       },
     });
@@ -543,7 +554,7 @@ const buildApproverMatchConditions = (user) => {
           role: 'hr',
           status: 'pending',
           $or: [
-            { assignee: new mongoose.Types.ObjectId(user.id) },
+            { assignee: approverId },
             { assignee: { $exists: false } },
             { assignee: null }
           ],
@@ -556,25 +567,39 @@ const buildApproverMatchConditions = (user) => {
 };
 
 export const getPendingApprovals = async (req, res) => {
-  const matchConditions = buildApproverMatchConditions(req.user);
+  try {
+    const matchConditions = buildApproverMatchConditions(req.user);
+    if (matchConditions.length === 0) return res.json([]);
 
-  if (matchConditions.length === 0) {
-    return res.json([]);
+    const { page, limit, skip } = parsePagination(req.query);
+    const filter = { $or: matchConditions };
+    const [requests, total] = await Promise.all([
+      LeaveRequest.find(filter)
+        .populate('staff', 'firstName lastName staffCode division')
+        .populate('leaveType', 'name code')
+        .populate({ path: 'approverChain.assignee', select: 'firstName lastName email' })
+        .sort({ startDate: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      LeaveRequest.countDocuments(filter),
+    ]);
+
+    res.set('X-Total-Count', String(total));
+    res.set('X-Total-Pages', String(Math.ceil(total / limit)));
+    res.set('X-Page', String(page));
+    res.set('X-Limit', String(limit));
+    res.json(requests);
+  } catch (err) {
+    console.error('getPendingApprovals error:', err);
+    res.status(500).json({ message: 'Failed to load pending approvals.' });
   }
-
-  const requests = await LeaveRequest.find({ $or: matchConditions })
-    .populate('staff', 'firstName lastName staffCode division')
-    .populate('leaveType', 'name code')
-    .populate({ path: 'approverChain.assignee', select: 'firstName lastName email' })
-    .sort({ startDate: 1 })
-    .lean();
-
-  res.json(requests);
 };
 
 export const getMyApprovals = async (req, res) => {
   try {
     const userId = req.user.id;
+    const { page, limit, skip } = parsePagination(req.query);
 
     const requests = await LeaveRequest.find({
       timeline: {
@@ -586,13 +611,14 @@ export const getMyApprovals = async (req, res) => {
     })
       .populate('leaveType', 'name code')
       .populate('staff', 'firstName lastName staffCode')
+      .sort({ updatedAt: -1 })
       .lean();
 
     const actions = [];
     for (const reqDoc of requests) {
       const staffName = `${reqDoc.staff?.firstName || ''} ${reqDoc.staff?.lastName || ''}`.trim();
-      const relevant = (reqDoc.timeline || []).filter((t) =>
-        String(t.actor) === String(userId) && ['approved', 'rejected'].includes(t.event)
+      const relevant = (reqDoc.timeline || []).filter(
+        (t) => String(t.actor) === String(userId) && ['approved', 'rejected'].includes(t.event)
       );
 
       for (const t of relevant) {
@@ -613,7 +639,14 @@ export const getMyApprovals = async (req, res) => {
 
     actions.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
-    res.json(actions);
+    const total = actions.length;
+    const paginated = actions.slice(skip, skip + limit);
+
+    res.set('X-Total-Count', String(total));
+    res.set('X-Total-Pages', String(Math.ceil(total / limit)));
+    res.set('X-Page', String(page));
+    res.set('X-Limit', String(limit));
+    res.json(paginated);
   } catch (error) {
     console.error('getMyApprovals error:', error);
     res.status(500).json({ message: 'Failed to load approvals history.' });
@@ -640,43 +673,95 @@ const userCanActOnStep = (step, user) => {
 export const approveLeaveRequest = async (req, res) => {
   const { id } = req.params;
   const { comment } = req.body || {};
-
-  const leaveRequest = await LeaveRequest.findById(id);
-  if (!leaveRequest) {
-    return res.status(404).json({ message: 'Leave request not found.' });
+  const leaveRequestId = String(id || '').trim();
+  if (!mongoose.Types.ObjectId.isValid(leaveRequestId)) {
+    return res.status(400).json({ message: 'Invalid leave request id.' });
   }
 
-  const step = findCurrentPendingStep(leaveRequest);
-  if (!userCanActOnStep(step, req.user)) {
-    return res.status(403).json({ message: 'You are not authorised to approve this request.' });
-  }
+  const session = await mongoose.startSession();
+  let leaveRequest;
+  let remaining;
+  let isFinalApproval = false;
+  let actionApplied = false;
 
-  step.status = 'approved';
-  step.actedAt = new Date();
-  step.comment = comment || undefined;
-  leaveRequest.updatedBy = req.user.id;
+  try {
+    await session.withTransaction(async () => {
+      leaveRequest = await LeaveRequest.findById(leaveRequestId).session(session);
+      if (!leaveRequest) {
+        throw new Error('LEAVE_REQUEST_NOT_FOUND');
+      }
 
-  appendTimeline(leaveRequest, 'approved', req.user.id, comment);
+      // Prevent self-approval
+      if (leaveRequest.staff.toString() === req.user.id) {
+        throw new Error('SELF_APPROVAL_FORBIDDEN');
+      }
 
-  const remaining = leaveRequest.approverChain.find((s) => s.status === 'pending');
-  const isFinalApproval = !remaining;
-  
-  if (remaining) {
-    const roleForStatus = remaining.role.toLowerCase();
-    leaveRequest.status = `pending_${roleForStatus}`;
-  } else {
-    leaveRequest.status = 'approved';
-    const period = currentPeriod(leaveRequest.startDate);
-    await adjustBalanceOnFinalApproval({
-      staffId: leaveRequest.staff,
-      leaveTypeId: leaveRequest.leaveType,
-      period,
-      duration: leaveRequest.durationDays,
+      if (leaveRequest.status === 'approved') {
+        // Idempotent: already approved, nothing to mutate.
+        return;
+      }
+
+      const step = findCurrentPendingStep(leaveRequest);
+      if (!userCanActOnStep(step, req.user)) {
+        throw new Error('NOT_AUTHORISED_FOR_STEP');
+      }
+
+      step.status = 'approved';
+      step.actedAt = new Date();
+      step.comment = comment || undefined;
+      leaveRequest.updatedBy = req.user.id;
+      actionApplied = true;
+
+      appendTimeline(leaveRequest, 'approved', req.user.id, comment);
+
+      remaining = leaveRequest.approverChain.find((s) => s.status === 'pending');
+      isFinalApproval = !remaining;
+
+      if (remaining) {
+        const roleForStatus = remaining.role.toLowerCase();
+        leaveRequest.status = `pending_${roleForStatus}`;
+      } else {
+        leaveRequest.status = 'approved';
+        const period = currentPeriod(leaveRequest.startDate);
+        await adjustBalanceOnFinalApproval({
+          staffId: leaveRequest.staff,
+          leaveTypeId: leaveRequest.leaveType,
+          period,
+          duration: leaveRequest.durationDays,
+          session,
+        });
+      }
+
+      await leaveRequest.save({ session });
     });
+  } catch (error) {
+    session.endSession();
+    if (error.message === 'LEAVE_REQUEST_NOT_FOUND') {
+      return res.status(404).json({ message: 'Leave request not found.' });
+    }
+    if (error.message === 'SELF_APPROVAL_FORBIDDEN') {
+      return res.status(403).json({ message: 'You cannot approve your own leave request.' });
+    }
+    if (error.message === 'NOT_AUTHORISED_FOR_STEP') {
+      return res.status(403).json({ message: 'You are not authorised to approve this request.' });
+    }
+    console.error('approveLeaveRequest transaction error:', error);
+    return res.status(409).json({ message: 'Unable to approve request right now. Please retry.' });
   }
 
-  await leaveRequest.save();
+  session.endSession();
   await leaveRequest.populate(['leaveType', 'staff']);
+
+  if (!actionApplied) {
+    return res.json(leaveRequest);
+  }
+  await logAudit('LEAVE_REQUEST_APPROVE', {
+    req,
+    leaveRequestId: leaveRequest._id.toString(),
+    staffId: leaveRequest.staff?._id?.toString?.() || leaveRequest.staff?.toString?.(),
+    finalApproval: isFinalApproval,
+    status: leaveRequest.status,
+  });
 
   try {
     const approver = await Staff.findById(req.user.id);
@@ -722,6 +807,14 @@ export const approveLeaveRequest = async (req, res) => {
     }
   } catch (emailError) {
     console.error('Failed to send approval emails:', emailError);
+    await logAudit('EMAIL_SEND_FAILURE', {
+      req,
+      event: 'leave-approval',
+      error: emailError?.message || emailError,
+      leaveRequestId: leaveRequest?._id?.toString?.(),
+      staffId: staff?._id?.toString?.(),
+      to: staff?.email,
+    });
   }
 
   res.json(leaveRequest);
@@ -730,35 +823,60 @@ export const approveLeaveRequest = async (req, res) => {
 export const rejectLeaveRequest = async (req, res) => {
   const { id } = req.params;
   const { comment } = req.body || {};
-
-  const leaveRequest = await LeaveRequest.findById(id);
-  if (!leaveRequest) {
-    return res.status(404).json({ message: 'Leave request not found.' });
+  const leaveRequestId = String(id || '').trim();
+  if (!mongoose.Types.ObjectId.isValid(leaveRequestId)) {
+    return res.status(400).json({ message: 'Invalid leave request id.' });
   }
 
-  const step = findCurrentPendingStep(leaveRequest);
-  if (!userCanActOnStep(step, req.user)) {
-    return res.status(403).json({ message: 'You are not authorised to reject this request.' });
+  const session = await mongoose.startSession();
+  let leaveRequest;
+
+  try {
+    await session.withTransaction(async () => {
+      leaveRequest = await LeaveRequest.findById(leaveRequestId).session(session);
+      if (!leaveRequest) throw new Error('LEAVE_REQUEST_NOT_FOUND');
+
+      if (leaveRequest.staff.toString() === req.user.id) throw new Error('SELF_REJECT_FORBIDDEN');
+      if (leaveRequest.status === 'rejected') return; // idempotent
+
+      const step = findCurrentPendingStep(leaveRequest);
+      if (!userCanActOnStep(step, req.user)) throw new Error('NOT_AUTHORISED_FOR_STEP');
+
+      step.status = 'rejected';
+      step.actedAt = new Date();
+      step.comment = comment || undefined;
+      leaveRequest.status = 'rejected';
+      leaveRequest.updatedBy = req.user.id;
+      appendTimeline(leaveRequest, 'rejected', req.user.id, comment);
+
+      const period = currentPeriod(leaveRequest.startDate);
+      await adjustBalanceOnRejection({
+        staffId: leaveRequest.staff,
+        leaveTypeId: leaveRequest.leaveType,
+        period,
+        duration: leaveRequest.durationDays,
+        session,
+      });
+
+      await leaveRequest.save({ session });
+    });
+  } catch (error) {
+    session.endSession();
+    if (error.message === 'LEAVE_REQUEST_NOT_FOUND') return res.status(404).json({ message: 'Leave request not found.' });
+    if (error.message === 'SELF_REJECT_FORBIDDEN') return res.status(403).json({ message: 'You cannot reject your own leave request.' });
+    if (error.message === 'NOT_AUTHORISED_FOR_STEP') return res.status(403).json({ message: 'You are not authorised to reject this request.' });
+    console.error('rejectLeaveRequest error:', error);
+    return res.status(409).json({ message: 'Unable to reject request right now. Please retry.' });
   }
 
-  step.status = 'rejected';
-  step.actedAt = new Date();
-  step.comment = comment || undefined;
-  leaveRequest.status = 'rejected';
-  leaveRequest.updatedBy = req.user.id;
-
-  appendTimeline(leaveRequest, 'rejected', req.user.id, comment);
-
-  const period = currentPeriod(leaveRequest.startDate);
-  await adjustBalanceOnRejection({
-    staffId: leaveRequest.staff,
-    leaveTypeId: leaveRequest.leaveType,
-    period,
-    duration: leaveRequest.durationDays,
-  });
-
-  await leaveRequest.save();
+  session.endSession();
   await leaveRequest.populate(['leaveType', 'staff']);
+  await logAudit('LEAVE_REQUEST_REJECT', {
+    req,
+    leaveRequestId: leaveRequest._id.toString(),
+    staffId: leaveRequest.staff?._id?.toString?.() || leaveRequest.staff?.toString?.(),
+    status: leaveRequest.status,
+  });
 
   try {
     const approver = await Staff.findById(req.user.id);
@@ -775,17 +893,32 @@ export const rejectLeaveRequest = async (req, res) => {
     }
   } catch (emailError) {
     console.error('Failed to send rejection email:', emailError);
+    await logAudit('EMAIL_SEND_FAILURE', {
+      req,
+      event: 'leave-rejection',
+      error: emailError?.message || emailError,
+      leaveRequestId: leaveRequest?._id?.toString?.(),
+      staffId: staff?._id?.toString?.(),
+      to: staff?.email,
+    });
   }
 
   res.json(leaveRequest);
 };
 
 export const getCalendarData = async (req, res) => {
+  try {
   const userId = req.user.id;
   const userRoles = new Set(req.user.roles || []);
   const isApprover = userRoles.has('teamLead') || userRoles.has('lineManager') || userRoles.has('hr');
 
-  const myRequests = await LeaveRequest.find({ staff: userId })
+  // Default window: current year ±1 to keep queries bounded
+  const now = new Date();
+  const windowStart = req.query.from ? new Date(req.query.from) : new Date(now.getFullYear() - 1, 0, 1);
+  const windowEnd = req.query.to ? new Date(req.query.to) : new Date(now.getFullYear() + 1, 11, 31);
+  const dateFilter = { startDate: { $lte: windowEnd }, endDate: { $gte: windowStart } };
+
+  const myRequests = await LeaveRequest.find({ staff: userId, ...dateFilter })
     .populate('leaveType', 'name code')
     .populate('staff', 'firstName lastName')
     .sort({ startDate: 1 })
@@ -820,6 +953,7 @@ export const getCalendarData = async (req, res) => {
       if (userRoles.has('hr')) {
         const teamRequests = await LeaveRequest.find({
           staff: { $ne: userId },
+          ...dateFilter,
           $or: [
             { status: 'approved' },
             {
@@ -862,6 +996,7 @@ export const getCalendarData = async (req, res) => {
           const teamRequests = await LeaveRequest.find({
             staff: { $in: teamStaffIds },
             status: { $in: ['approved', 'pending_teamlead', 'pending_linemanager', 'pending_hr'] },
+            ...dateFilter,
           })
             .populate('leaveType', 'name code')
             .populate('staff', 'firstName lastName')
@@ -890,6 +1025,10 @@ export const getCalendarData = async (req, res) => {
   }
 
   res.json({ events });
+  } catch (err) {
+    console.error('getCalendarData error:', err);
+    res.status(500).json({ message: 'Failed to load calendar data.' });
+  }
 };
 
 // Get attachment file from GridFS
@@ -943,11 +1082,16 @@ export const getAttachment = async (req, res) => {
     
     const file = files[0];
     
-    // Set headers
+    // Sanitize filename — strip everything except safe characters to prevent header injection.
+    const rawName = file.metadata?.originalName || file.filename || 'attachment';
+    const safeFilename = rawName.replace(/[^\w.\-]/g, '_');
+
     res.set({
       'Content-Type': file.contentType || 'application/octet-stream',
-      'Content-Disposition': `attachment; filename="${file.metadata?.originalName || file.filename}"`,
+      'Content-Disposition': `attachment; filename="${safeFilename}"`,
       'Content-Length': file.length,
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, no-store',
     });
     
     // Stream file to response
