@@ -1025,10 +1025,11 @@ export const getCalendarData = async (req, res) => {
   }
 
   res.json({ events });
-  } catch (err) {
-    console.error('getCalendarData error:', err);
-    res.status(500).json({ message: 'Failed to load calendar data.' });
-  }
+}
+catch (err) {
+  console.error('getCalendarData error:', err);
+  res.status(500).json({ message: 'Failed to load calendar data.' });
+}
 };
 
 // Get attachment file from GridFS
