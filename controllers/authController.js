@@ -34,7 +34,6 @@ const cookieOptions = {
   secure: process.env.NODE_ENV === 'production',
   sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
   path: '/',
-  domain: process.env.NODE_ENV === 'production' ? '.paulusoro.com' : undefined,
 };
 
 const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
@@ -165,13 +164,25 @@ const respondWithTokens = async (res, staff, scope) => {
   setAccessCookie(res, accessToken, scope);
   setRefreshCookie(res, refreshToken, scope);
 
+  // Team / department names come from Team + Department collections (Staff.team → Team).
+  const org = await Staff.findById(staff._id).populate('team', 'name').populate('department', 'name').lean();
+
   // Resolve reporting relationships so the leave frontend can display approver names
   const teamLead = staff.teamLeadId ? await Staff.findById(staff.teamLeadId).select('firstName lastName email') : null;
   const lineManager = staff.lineManagerId ? await Staff.findById(staff.lineManagerId).select('firstName lastName email') : null;
   const hr = staff.hrId ? await Staff.findById(staff.hrId).select('firstName lastName email') : null;
 
+  const teamPayload = org?.team
+    ? { id: org.team._id, name: org.team.name }
+    : null;
+  const departmentPayload = org?.department
+    ? { id: org.department._id, name: org.department.name }
+    : null;
+
   const userProfile = {
     ...pickUserProfile(staff),
+    team: teamPayload,
+    department: departmentPayload,
     teamLead: teamLead
       ? { id: teamLead._id, firstName: teamLead.firstName, lastName: teamLead.lastName, email: teamLead.email }
       : null,
