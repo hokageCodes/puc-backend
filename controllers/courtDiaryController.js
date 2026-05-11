@@ -45,9 +45,6 @@ const resolveRequesterScope = async (userId) => {
   if (!staff) {
     return { error: { status: 404, message: 'Staff profile not found.' } };
   }
-  if (!staff.team) {
-    return { error: { status: 403, message: 'Diary access requires team assignment.' } };
-  }
   return { staff };
 };
 
@@ -120,7 +117,7 @@ export const listDiaryEntries = async (req, res) => {
 
     const { page, limit, skip } = parsePagination(req.query);
     const teamId = teamIdFromStaff(scope.staff);
-    const filter = { team: teamId };
+    const filter = teamId ? { team: teamId } : { createdBy: scope.staff._id };
     const dateFilter = buildDateRangeFilter(req.query);
 
     if (dateFilter) {
@@ -189,7 +186,8 @@ export const getDiaryEntry = async (req, res) => {
     }
 
     const teamId = teamIdFromStaff(scope.staff);
-    const entry = await CourtDiaryEntry.findOne({ _id: entryId, team: teamId })
+    const entryFilter = teamId ? { _id: entryId, team: teamId } : { _id: entryId, createdBy: scope.staff._id };
+    const entry = await CourtDiaryEntry.findOne(entryFilter)
       .populate('team', 'name')
       .populate('department', 'name')
       .populate('createdBy', 'firstName lastName email')
@@ -258,8 +256,9 @@ export const updateDiaryEntry = async (req, res) => {
     }
 
     const teamId = teamIdFromStaff(scope.staff);
+    const entryFilter = teamId ? { _id: entryId, team: teamId } : { _id: entryId, createdBy: scope.staff._id };
     const entry = await CourtDiaryEntry.findOneAndUpdate(
-      { _id: entryId, team: teamId },
+      entryFilter,
       updateDoc,
       { new: true, runValidators: true }
     )
@@ -301,7 +300,8 @@ export const deleteDiaryEntry = async (req, res) => {
     }
 
     const teamId = teamIdFromStaff(scope.staff);
-    const deleted = await CourtDiaryEntry.findOneAndDelete({ _id: entryId, team: teamId }).lean();
+    const entryFilter = teamId ? { _id: entryId, team: teamId } : { _id: entryId, createdBy: scope.staff._id };
+    const deleted = await CourtDiaryEntry.findOneAndDelete(entryFilter).lean();
     if (!deleted) {
       return res.status(404).json({ message: 'Diary entry not found.' });
     }
@@ -327,8 +327,9 @@ export const getDiaryAvailability = async (req, res) => {
     const dayEnd = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59, 59, 999));
 
     const teamId = teamIdFromStaff(scope.staff);
+    const availabilityFilter = teamId ? { team: teamId } : { createdBy: scope.staff._id };
     const conflicts = await CourtDiaryEntry.find({
-      team: teamId,
+      ...availabilityFilter,
       appearanceDate: { $gte: dayStart, $lte: dayEnd },
     })
       .select('matterTitle matterRef court appearanceDate appearanceTime status')

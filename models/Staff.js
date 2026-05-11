@@ -38,6 +38,7 @@ const StaffSchema = new mongoose.Schema(
     hrId: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff' },
 
     isVisible: { type: Boolean, default: true },
+    displayOrder: { type: Number, default: 0 },
 
     passwordHash: { type: String },
     passwordResetToken: { type: String },

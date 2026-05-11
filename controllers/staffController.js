@@ -154,7 +154,7 @@ export const getPublicStaff = async (req, res) => {
   try {
     // Only return staff marked visible (or omitted isVisible field)
     const staffList = await Staff.find({ isVisible: { $ne: false } })
-      .sort({ staffCode: 1, createdAt: 1 })
+      .sort({ displayOrder: 1, createdAt: 1 })
       .select('firstName lastName position profilePhoto bio department team staffCode')
       .populate('department', 'name')
       .populate('team', 'name')
@@ -546,6 +546,23 @@ export const deleteStaff = async (req, res) => {
     res.json({ message: 'Staff deleted successfully' });
   } catch (err) {
     res.status(500).json({ error: 'Error deleting staff', details: err.message });
+  }
+};
+
+export const reorderStaff = async (req, res) => {
+  try {
+    const { updates } = req.body;
+    if (!Array.isArray(updates) || updates.length === 0) {
+      return res.status(400).json({ error: 'updates array is required' });
+    }
+    await Promise.all(
+      updates.map(({ id, displayOrder }) =>
+        Staff.findByIdAndUpdate(id, { displayOrder })
+      )
+    );
+    res.json({ message: 'Order saved' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to save order', details: err.message });
   }
 };
 

@@ -7,6 +7,7 @@ import {
   updateStaff,
   deleteStaff,
   getStaffById,
+  reorderStaff,
 } from '../controllers/staffController.js';
 import { requireAuth, requireRoles } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validation.js';
@@ -81,6 +82,7 @@ const staffWriteAllowlist = [
 
 router.get('/', getAllStaff);
 router.get('/:id', getStaffById);
+router.patch('/reorder', reorderStaff);
 router.post('/', handleUpload([validateBody({ allowlist: staffWriteAllowlist, required: ['firstName', 'lastName', 'email'] })], createStaff));
 router.put('/:id', handleUpload([validateBody({ allowlist: staffWriteAllowlist })], updateStaff));
 router.delete('/:id', deleteStaff);

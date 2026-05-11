@@ -4,7 +4,7 @@ const COURT_DIARY_STATUSES = ['scheduled', 'held', 'adjourned', 'closed'];
 
 const CourtDiaryEntrySchema = new mongoose.Schema(
   {
-    team: { type: mongoose.Schema.Types.ObjectId, ref: 'Team', required: true },
+    team: { type: mongoose.Schema.Types.ObjectId, ref: 'Team' },
     department: { type: mongoose.Schema.Types.ObjectId, ref: 'Department' },
     matterTitle: { type: String, required: true, trim: true, maxlength: 300 },
     matterRef: { type: String, trim: true, maxlength: 120 },
