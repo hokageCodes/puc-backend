@@ -3,6 +3,7 @@ import {
   createDiaryEntry,
   deleteDiaryEntry,
   getDiaryAvailability,
+  getDiaryConflictsPreview,
   getDiaryEntry,
   listDiaryEntries,
   updateDiaryEntry,
@@ -17,6 +18,7 @@ router.use(ensureLeaveEnrolled);
 router.use(requireRoles('admin', 'hr', 'lineManager', 'teamLead', 'staff'));
 
 router.get('/entries', listDiaryEntries);
+router.get('/entries/conflicts-preview', getDiaryConflictsPreview);
 router.get('/entries/:id', getDiaryEntry);
 router.get('/calendar/availability', getDiaryAvailability);
 
@@ -32,6 +34,8 @@ router.post(
       'nextHearingDate',
       'notes',
       'status',
+      'acknowledgeDuplicate',
+      'acknowledgeTeamOverlap',
     ],
     required: ['matterTitle', 'court', 'appearanceDate'],
   }),
@@ -50,6 +54,8 @@ router.patch(
       'nextHearingDate',
       'notes',
       'status',
+      'acknowledgeDuplicate',
+      'acknowledgeTeamOverlap',
     ],
   }),
   updateDiaryEntry

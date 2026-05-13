@@ -86,7 +86,8 @@ async function seedDepartmentsAndTeams() {
   ];
 
   for (const dept of departments) {
-    const createdDept = await Department.create({ name: dept.name });
+    const courtDiaryScope = dept.name.toLowerCase().includes('litigation') ? 'team' : 'department';
+    const createdDept = await Department.create({ name: dept.name, courtDiaryScope });
 
     const createdTeams = await Promise.all(
       dept.teams.map(teamName =>

@@ -23,5 +23,7 @@ const CourtDiaryEntrySchema = new mongoose.Schema(
 CourtDiaryEntrySchema.index({ team: 1, appearanceDate: 1 });
 CourtDiaryEntrySchema.index({ team: 1, matterRef: 1 });
 CourtDiaryEntrySchema.index({ team: 1, status: 1, appearanceDate: 1 });
+CourtDiaryEntrySchema.index({ department: 1, appearanceDate: 1 });
+CourtDiaryEntrySchema.index({ department: 1, status: 1, appearanceDate: 1 });
 
 export default mongoose.model('CourtDiaryEntry', CourtDiaryEntrySchema);

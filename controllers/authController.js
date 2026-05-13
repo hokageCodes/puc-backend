@@ -370,8 +370,34 @@ export const sendInvite = async (req, res) => {
     res.json({ message: 'Activation email sent' });
   } catch (err) {
     console.error('Send invite error:', err?.message || err);
-    const statusCode = err?.code === 'SMTP_NOT_CONFIGURED' ? 503 : 500;
-    res.status(statusCode).json({ message: 'Unable to send activation email at the moment' });
+
+    let statusCode = 500;
+    let message = 'Unable to send activation email at the moment';
+
+    if (err?.code === 'SMTP_NOT_CONFIGURED') {
+      statusCode = 503;
+      message =
+        'Email is not configured on this server. Set RESEND_API_KEY (recommended — resend.com) or configure SMTP_HOST, SMTP_PORT, SMTP_USER, and SMTP_PASS in the backend .env, then restart the API.';
+    } else if (err?.code === 'ETIMEDOUT') {
+      statusCode = 503;
+      message =
+        'Email could not be sent: connection to the mail server timed out. Check network/firewall or use Resend (RESEND_API_KEY) instead of SMTP.';
+    } else if (err?.code === 'EAUTH' || err?.responseCode === 535) {
+      message =
+        'Email server rejected login. Check SMTP_USER / SMTP_PASS (use an app password for Microsoft 365 or Gmail).';
+    } else if (err?.code === 'RESEND_API_ERROR' && err?.statusCode === 403) {
+      statusCode = 502;
+      message =
+        'Resend refused this send (often: unverified domain or using a from-address that is not allowed). Check the Resend dashboard, RESEND_FROM, and domain verification.';
+    } else if (err?.code === 'RESEND_API_ERROR') {
+      statusCode = 502;
+      message =
+        `Resend error: ${typeof err?.response?.message === 'string' ? err.response.message : err?.message || 'check API key and from-address'}`;
+    } else if (process.env.NODE_ENV === 'development') {
+      message = `Unable to send activation email (${err?.message || err?.code || 'unknown'})`;
+    }
+
+    res.status(statusCode).json({ message, code: err?.code });
   }
 };
 

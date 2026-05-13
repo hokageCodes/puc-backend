@@ -7,6 +7,12 @@ if (!cached) {
   cached = global.mongoose = { conn: null, promise: null };
 }
 
+const getMongoUri = () =>
+  process.env.MONGODB_URI?.trim() ||
+  process.env.MONGO_URI?.trim() ||
+  process.env.DATABASE_URL?.trim() ||
+  '';
+
 const connectDB = async () => {
   // If already connected, return the existing connection
   if (cached.conn) {
@@ -15,6 +21,15 @@ const connectDB = async () => {
 
   // If connection is in progress, wait for it
   if (!cached.promise) {
+    const uri = getMongoUri();
+    if (!uri) {
+      const err = new Error(
+        'Missing MongoDB URI: set MONGODB_URI (or MONGO_URI / DATABASE_URL) in puc-backend/.env'
+      );
+      console.error(`❌ ${err.message}`);
+      throw err;
+    }
+
     const opts = {
       bufferCommands: true, // Changed to true for serverless - allows queuing commands while connecting
     };
@@ -22,7 +37,7 @@ const connectDB = async () => {
       opts.dbName = process.env.MONGODB_DB_NAME;
     }
 
-    cached.promise = mongoose.connect(process.env.MONGODB_URI, opts).then((mongoose) => {
+    cached.promise = mongoose.connect(uri, opts).then((mongoose) => {
       console.log(`✅ MongoDB connected to ${mongoose.connection.name}`);
       return mongoose;
     });

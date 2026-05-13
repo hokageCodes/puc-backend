@@ -4,47 +4,82 @@
  * Sign up at: https://resend.com
  */
 
+const FALLBACK_FROM = 'Paul Usoro & Co <onboarding@resend.dev>';
+
+const isPlaceholderOrUnsafeDomain = (addr) => {
+  const lower = String(addr).toLowerCase();
+  return (
+    lower.includes('yourdomain.') ||
+    lower.includes('example.com') ||
+    lower.includes('test.com') ||
+    lower.endsWith('@localhost')
+  );
+};
+
+/**
+ * Resolves a valid Resend "from" line. Unverified / placeholder domains fall back to onboarding@resend.dev.
+ */
+const resolveResendFrom = () => {
+  const candidates = [process.env.RESEND_FROM, process.env.EMAIL_FROM].filter(Boolean);
+
+  for (const raw of candidates) {
+    const s = String(raw).replace(/^["']|["']$/g, '').trim();
+    if (!s) continue;
+
+    // "Name <email@domain.com>"
+    const bracket = s.match(/^(.+?)\s*<([^>]+)>$/);
+    if (bracket) {
+      const display = bracket[1].trim();
+      const addr = bracket[2].trim().toLowerCase();
+      if (addr.endsWith('@resend.dev')) {
+        return `${display} <${addr}>`;
+      }
+      if (isPlaceholderOrUnsafeDomain(addr)) {
+        console.warn(
+          '[resend] From-address uses a placeholder or unsafe domain; using onboarding@resend.dev instead.'
+        );
+        return `${display} <onboarding@resend.dev>`;
+      }
+      return `${display} <${addr}>`;
+    }
+
+    // Bare email
+    if (/^[^\s<]+@[^\s>]+$/.test(s)) {
+      const addr = s.toLowerCase();
+      if (addr.endsWith('@resend.dev')) return s;
+      if (isPlaceholderOrUnsafeDomain(addr)) {
+        console.warn('[resend] Bare from-address is a placeholder; using onboarding@resend.dev.');
+        return FALLBACK_FROM;
+      }
+      return s;
+    }
+
+    // Legacy junk e.g. "Paul Usoro & Co no-reply@yourdomain.com" (no brackets)
+    const embedded = s.match(/([\w.+-]+@[\w.-]+\.[a-z]{2,})/i);
+    if (embedded) {
+      const addr = embedded[1];
+      if (isPlaceholderOrUnsafeDomain(addr)) {
+        console.warn('[resend] Embedded from-email is a placeholder; using onboarding@resend.dev.');
+        return FALLBACK_FROM;
+      }
+      return `Paul Usoro & Co <${addr}>`;
+    }
+  }
+
+  return FALLBACK_FROM;
+};
+
 const sendEmailViaResend = async ({ to, subject, html, text }) => {
   const RESEND_API_KEY = process.env.RESEND_API_KEY;
-  
-  console.log('🔍 Resend function called');
-  console.log('RESEND_API_KEY exists:', !!RESEND_API_KEY);
-  console.log('RESEND_API_KEY length:', RESEND_API_KEY ? RESEND_API_KEY.length : 0);
-  console.log('RESEND_API_KEY starts with:', RESEND_API_KEY ? RESEND_API_KEY.substring(0, 3) : 'N/A');
-  
+
   if (!RESEND_API_KEY) {
     const error = new Error('RESEND_API_KEY is not configured. Get a free API key at https://resend.com');
     error.code = 'RESEND_NOT_CONFIGURED';
     throw error;
   }
 
-  // For Resend, if domain not verified, must use onboarding@resend.dev
-  // Check if EMAIL_FROM contains a custom domain (not resend.dev)
-  let fromEmail = process.env.RESEND_FROM || 'onboarding@resend.dev';
-  
-  // If EMAIL_FROM is set and contains @resend.dev, use it
-  // Otherwise, if it contains a custom domain, extract just the display name
-  if (process.env.EMAIL_FROM) {
-    const emailFrom = process.env.EMAIL_FROM.replace(/^["']|["']$/g, '');
-    // Check if it's a resend.dev email
-    if (emailFrom.includes('@resend.dev')) {
-      fromEmail = emailFrom;
-    } else if (emailFrom.includes('<') && emailFrom.includes('>')) {
-      // Extract display name and use onboarding@resend.dev
-      const match = emailFrom.match(/^(.+?)\s*<.+>$/);
-      if (match) {
-        fromEmail = `${match[1].trim()} <onboarding@resend.dev>`;
-      } else {
-        fromEmail = 'onboarding@resend.dev';
-      }
-    } else {
-      // Just use the default
-      fromEmail = 'onboarding@resend.dev';
-    }
-  }
-  
-  const cleanFrom = fromEmail.replace(/^["']|["']$/g, '');
-  
+  const cleanFrom = resolveResendFrom();
+
   console.log('📧 Sending email via Resend:');
   console.log('  From:', cleanFrom);
   console.log('  To:', to);
@@ -55,7 +90,7 @@ const sendEmailViaResend = async ({ to, subject, html, text }) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${RESEND_API_KEY}`,
+        Authorization: `Bearer ${RESEND_API_KEY}`,
       },
       body: JSON.stringify({
         from: cleanFrom,
@@ -67,9 +102,8 @@ const sendEmailViaResend = async ({ to, subject, html, text }) => {
     });
 
     const data = await response.json();
-    
+
     console.log('📬 Resend API Response Status:', response.status);
-    console.log('📬 Resend API Response:', JSON.stringify(data, null, 2));
 
     if (!response.ok) {
       const error = new Error(data.message || `Resend API error: ${response.status}`);
@@ -84,8 +118,6 @@ const sendEmailViaResend = async ({ to, subject, html, text }) => {
     return data;
   } catch (error) {
     console.error('❌ Resend email error:', error.message);
-    console.error('❌ Resend error code:', error.code);
-    console.error('❌ Resend error stack:', error.stack);
     if (error.response) {
       console.error('❌ Resend error response:', JSON.stringify(error.response, null, 2));
     }
@@ -94,4 +126,3 @@ const sendEmailViaResend = async ({ to, subject, html, text }) => {
 };
 
 export default sendEmailViaResend;
-

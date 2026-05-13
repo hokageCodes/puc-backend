@@ -6,7 +6,9 @@ const STAFF_SAFE_FIELDS = [
   'leaveEnabled', 'hireDate', 'confirmationDate', 'isVisible', 'employeeId'
 ];
 import Staff from '../models/Staff.js';
+import Department from '../models/Department.js';
 import { logAudit } from '../utils/auditLogger.js';
+import { isTeamScopedDiaryDepartment } from '../utils/courtDiaryScope.js';
 import Counter from '../models/Counter.js';
 import { ALL_ROLES_SET, DEFAULT_ROLE } from '../config/rbac.js';
 
@@ -284,6 +286,15 @@ export const createStaff = async (req, res) => {
       if (practiceAreas.length === 0) practiceAreas = undefined;
     }
 
+    if (department) {
+      const deptDoc = await Department.findById(department).select('name courtDiaryScope').lean();
+      if (deptDoc && isTeamScopedDiaryDepartment(deptDoc) && !team) {
+        return res.status(400).json({
+          error: 'Team is required for this department so court diary can be scoped per team.',
+        });
+      }
+    }
+
     const newStaff = new Staff({
       ...rest,
       division: normalizedDivision,
@@ -494,6 +505,24 @@ export const updateStaff = async (req, res) => {
 
     if (Object.keys(updatePayload).length === 0) {
       return res.status(400).json({ error: 'No valid fields provided for update' });
+    }
+
+    const prior = await Staff.findById(id).select('department team').lean();
+    let nextDeptId = prior?.department?._id || prior?.department || null;
+    let nextTeamId = prior?.team?._id || prior?.team || null;
+    if (department !== undefined) {
+      nextDeptId = department && String(department).trim() !== '' ? department : null;
+    }
+    if (team !== undefined) {
+      nextTeamId = team && String(team).trim() !== '' ? team : null;
+    }
+    if (nextDeptId) {
+      const deptDoc = await Department.findById(nextDeptId).select('name courtDiaryScope').lean();
+      if (deptDoc && isTeamScopedDiaryDepartment(deptDoc) && !nextTeamId) {
+        return res.status(400).json({
+          error: 'Team is required for this department so court diary can be scoped per team.',
+        });
+      }
     }
 
     const updated = await Staff.findByIdAndUpdate(id, updatePayload, { new: true });

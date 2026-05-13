@@ -41,6 +41,12 @@ const apiLimiter = rateLimit({
 // Apply to all API routes
 app.use('/api/', apiLimiter);
 
+// JSON APIs must not be cached by browsers or shared proxies (stale admin/CMS data across devices)
+app.use('/api', (req, res, next) => {
+  res.setHeader('Cache-Control', 'private, no-store, must-revalidate');
+  next();
+});
+
 // Load environment variables FIRST
 dotenv.config();
 
