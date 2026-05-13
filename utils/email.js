@@ -236,30 +236,54 @@ const baseUrl = (path = '') => {
 export const buildActivationEmail = (user, token) => {
   const encoded = encodeURIComponent(token);
   const url = baseUrl(`/leave/activate?token=${encoded}`);
-  const name = user.firstName || user.email;
+  const first = String(user?.firstName || '').trim();
+  const greet = first || 'there';
+
+  const escapeHtml = (s) =>
+    String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  const greetHtml = escapeHtml(greet);
+
+  const textBody = [
+    `Hi ${greet},`,
+    '',
+    'Welcome to PUC Hub 👋🏽',
+    '',
+    'Your staff account has been created successfully.',
+    "PUC Hub gives you secure access to the company's internal tools and services, including leave management, diary access, admin resources, and other role-based applications.",
+    '',
+    'To get started, please activate your account and create your password using the link below.',
+    '',
+    url,
+    '',
+    'For security reasons, this activation link will expire in 60 minutes.',
+    '',
+    "Once your password is set, you'll use the same login details across all authorized Paul Usoro & Co platforms.",
+    '',
+    'If you did not expect this email, you can safely ignore it.',
+    '',
+    'Warm regards,',
+    'PUC IT Team',
+  ].join('\n');
+
   return {
     subject: 'Activate your PUC Hub account',
-    text: [
-      `Hello ${name},`,
-      '',
-      'Welcome to PUC Hub. One quick step unlocks your staff login for our in-house apps—leave, diary, admin tools, and anything else your role has access to.',
-      '',
-      `Open the secure link below, choose a password, and you are set for every Paul Usoro & Co system that uses this account:`,
-      url,
-      '',
-      'This link expires in 60 minutes. If you did not expect this email, you can ignore it.',
-      '',
-      '— PUC IT Team',
-    ].join('\n'),
+    text: textBody,
     html: `
-      <p>Hello ${name},</p>
-      <p><strong>Welcome to PUC Hub.</strong> One quick step unlocks your staff login for our in-house apps—leave, diary, admin tools, and whatever else your role has access to.</p>
-      <p>Open the button below, choose a password, and use that same login across Paul Usoro &amp; Co systems.</p>
-      <p style="margin: 24px 0;">
-        <a href="${url}" target="_blank" rel="noopener noreferrer" style="background: #059669; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: 600;">Activate my account</a>
+      <p style="margin: 0 0 12px; font-size: 16px; color: #0f172a;">Hi ${greetHtml},</p>
+      <p style="margin: 0 0 16px; font-size: 16px; color: #0f172a;">Welcome to PUC Hub 👋🏽</p>
+      <p style="margin: 0 0 12px; font-size: 15px; line-height: 1.55; color: #334155;">Your staff account has been created successfully.</p>
+      <p style="margin: 0 0 16px; font-size: 15px; line-height: 1.55; color: #334155;">PUC Hub gives you secure access to the company&apos;s internal tools and services, including leave management, diary access, admin resources, and other role-based applications.</p>
+      <p style="margin: 0 0 20px; font-size: 15px; line-height: 1.55; color: #334155;">To get started, please activate your account and create your password using the button below.</p>
+      <p style="margin: 0 0 24px;">
+        <a href="${url}" target="_blank" rel="noopener noreferrer" style="background: #059669; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: 600;">Activate My Account</a>
       </p>
-      <p style="color: #64748b; font-size: 14px;">This link expires in 60 minutes. If you did not expect this email, you can ignore it.</p>
-      <p style="margin-top: 24px; color: #64748b; font-size: 14px;">— <strong>PUC IT Team</strong></p>
+      <p style="margin: 0 0 12px; font-size: 14px; line-height: 1.5; color: #64748b;">For security reasons, this activation link will expire in 60 minutes.</p>
+      <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #64748b;">Once your password is set, you&apos;ll use the same login details across all authorized Paul Usoro &amp; Co platforms.</p>
+      <p style="margin: 0 0 24px; font-size: 14px; line-height: 1.5; color: #64748b;">If you did not expect this email, you can safely ignore it.</p>
+      <p style="margin: 0; font-size: 14px; line-height: 1.5; color: #334155;">Warm regards,<br /><strong>PUC IT Team</strong></p>
     `,
   };
 };
