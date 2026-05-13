@@ -1,9 +1,10 @@
 import mongoose from 'mongoose';
+import { OFFICE_LOCATION_KEYS } from '../config/officeLocations.js';
 // Only allow these fields to be set by non-admins
 const STAFF_SAFE_FIELDS = [
   'firstName', 'lastName', 'email', 'phoneNumber', 'position', 'bio', 'profilePhoto',
-  'department', 'team', 'practiceAreas', 'division', 'teamLeadId', 'lineManagerId', 'hrId',
-  'leaveEnabled', 'hireDate', 'confirmationDate', 'isVisible', 'employeeId'
+  'department', 'team', 'practiceAreas', 'division', 'officeLocation', 'teamLeadId', 'lineManagerId', 'hrId',
+  'leaveEnabled', 'hireDate', 'confirmationDate', 'isVisible', 'employeeId',
 ];
 import Staff from '../models/Staff.js';
 import Department from '../models/Department.js';
@@ -47,6 +48,15 @@ const normalizeDivision = (value) => {
   if (!value) return 'legal';
   const normalized = value.toString().trim().toLowerCase();
   return STAFF_DIVISIONS.includes(normalized) ? normalized : 'legal';
+};
+
+/** @returns {string|undefined} set value, `null` to clear, `false` if invalid */
+const normalizeOfficeLocation = (value) => {
+  if (value === undefined) return undefined;
+  const s = String(value).trim().toLowerCase();
+  if (s === '' || s === 'none' || s === 'null') return null;
+  if (OFFICE_LOCATION_KEYS.includes(s)) return s;
+  return false;
 };
 
 const normalizeObjectIdField = (value) => {
@@ -136,7 +146,7 @@ export const getAllStaff = async (req, res) => {
     // Only select non-sensitive fields
     const staffList = await Staff.find()
       .select(
-        'firstName lastName email phoneNumber position bio profilePhoto department team practiceAreas division teamLeadId lineManagerId hrId leaveEnabled hireDate confirmationDate isVisible employeeId staffCode roles passwordSetAt lastInviteSentAt passwordHash createdAt updatedAt'
+        'firstName lastName email phoneNumber position bio profilePhoto department team practiceAreas division officeLocation teamLeadId lineManagerId hrId leaveEnabled hireDate confirmationDate isVisible employeeId staffCode roles passwordSetAt lastInviteSentAt passwordHash createdAt updatedAt'
       )
       .sort({ staffCode: 1, createdAt: 1 })
       .populate('department', 'name')
@@ -169,7 +179,7 @@ export const getPublicStaff = async (req, res) => {
     // Only return staff marked visible (or omitted isVisible field)
     const staffList = await Staff.find({ isVisible: { $ne: false } })
       .sort({ displayOrder: 1, createdAt: 1 })
-      .select('firstName lastName position profilePhoto bio department team staffCode')
+      .select('firstName lastName position profilePhoto bio department team staffCode officeLocation')
       .populate('department', 'name')
       .populate('team', 'name')
       .lean();
@@ -190,7 +200,7 @@ export const getPublicStaffById = async (req, res) => {
     }
 
     const staff = await Staff.findOne({ _id: staffId, isVisible: { $ne: false } })
-      .select('firstName lastName position profilePhoto bio email phoneNumber practiceAreas department team staffCode')
+      .select('firstName lastName position profilePhoto bio email phoneNumber practiceAreas department team staffCode officeLocation')
       .populate('department', 'name')
       .populate('team', 'name')
       .populate('practiceAreas', 'name')
@@ -221,7 +231,7 @@ export const getStaffById = async (req, res) => {
 
     let staff = await Staff.findById(staffId)
       .select(
-        'firstName lastName email phoneNumber position bio profilePhoto department team practiceAreas division teamLeadId lineManagerId hrId leaveEnabled hireDate confirmationDate isVisible employeeId staffCode roles passwordSetAt lastInviteSentAt passwordHash createdAt updatedAt displayOrder'
+        'firstName lastName email phoneNumber position bio profilePhoto department team practiceAreas division officeLocation teamLeadId lineManagerId hrId leaveEnabled hireDate confirmationDate isVisible employeeId staffCode roles passwordSetAt lastInviteSentAt passwordHash createdAt updatedAt displayOrder'
       )
       .populate('department', 'name')
       .populate('team', 'name')
@@ -273,6 +283,7 @@ export const createStaff = async (req, res) => {
       practiceAreas,
       roles,
       division,
+      officeLocation,
       teamLeadId,
       lineManagerId,
       hrId,
@@ -298,6 +309,12 @@ export const createStaff = async (req, res) => {
     const normalizedHrId = normalizeObjectIdField(hrId);
     const normalizedHireDate = normalizeDate(hireDate);
     const normalizedConfirmationDate = normalizeDate(confirmationDate);
+    const normalizedOfficeLocation = normalizeOfficeLocation(officeLocation);
+    if (normalizedOfficeLocation === false) {
+      return res.status(400).json({
+        error: 'Invalid office location. Use lagos, abuja, or uyo (PUC Lagos, Abuja, or Uyo).',
+      });
+    }
 
     if (department === '') department = undefined;
     if (team === '') team = undefined;
@@ -325,6 +342,7 @@ export const createStaff = async (req, res) => {
       leaveEnabled: normalizedLeaveEnabled,
       hireDate: normalizedHireDate,
       confirmationDate: normalizedConfirmationDate,
+      ...(normalizedOfficeLocation ? { officeLocation: normalizedOfficeLocation } : {}),
       ...(department ? { department } : {}),
       ...(team ? { team } : {}),
       ...(practiceAreas ? { practiceAreas } : {}),
@@ -393,6 +411,7 @@ export const updateStaff = async (req, res) => {
       removeImage,
       roles,
       division,
+      officeLocation,
       teamLeadId,
       lineManagerId,
       hrId,
@@ -415,6 +434,20 @@ export const updateStaff = async (req, res) => {
 
     if (division !== undefined) {
       updateData.division = normalizeDivision(division);
+    }
+
+    if (officeLocation !== undefined) {
+      const normalizedOfficeLocation = normalizeOfficeLocation(officeLocation);
+      if (normalizedOfficeLocation === false) {
+        return res.status(400).json({
+          error: 'Invalid office location. Use lagos, abuja, or uyo (PUC Lagos, Abuja, or Uyo).',
+        });
+      }
+      if (normalizedOfficeLocation) {
+        updateData.officeLocation = normalizedOfficeLocation;
+      } else {
+        unsetData.officeLocation = '';
+      }
     }
 
     if (roles !== undefined) {

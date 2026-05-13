@@ -75,7 +75,7 @@ router.use(requireRoles('admin', 'hr', 'cms'));
 
 const staffWriteAllowlist = [
   'firstName', 'lastName', 'email', 'phoneNumber', 'position', 'bio', 'profilePhoto',
-  'department', 'team', 'practiceAreas', 'division', 'teamLeadId', 'lineManagerId',
+  'department', 'team', 'practiceAreas', 'division', 'officeLocation', 'teamLeadId', 'lineManagerId',
   'hrId', 'leaveEnabled', 'hireDate', 'confirmationDate', 'isVisible', 'employeeId',
   'roles', 'removeImage',
 ];

@@ -18,6 +18,12 @@ const StaffSchema = new mongoose.Schema(
     staffCode: { type: String },
 
     division: { type: String, enum: STAFF_DIVISIONS, default: 'legal' },
+    /** Primary office / branch: PUC Lagos, Abuja, or Uyo */
+    officeLocation: {
+      type: String,
+      enum: ['lagos', 'abuja', 'uyo'],
+      default: undefined,
+    },
     roles: { type: [String], default: ['staff'] },
     leaveEnabled: { type: Boolean, default: true },
 
