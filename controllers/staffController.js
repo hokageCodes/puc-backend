@@ -135,7 +135,9 @@ export const getAllStaff = async (req, res) => {
     await syncStaffCodeCounter();
     // Only select non-sensitive fields
     const staffList = await Staff.find()
-      .select('firstName lastName email phoneNumber position bio profilePhoto department team practiceAreas division teamLeadId lineManagerId hrId leaveEnabled hireDate confirmationDate isVisible employeeId staffCode roles createdAt updatedAt')
+      .select(
+        'firstName lastName email phoneNumber position bio profilePhoto department team practiceAreas division teamLeadId lineManagerId hrId leaveEnabled hireDate confirmationDate isVisible employeeId staffCode roles passwordSetAt lastInviteSentAt passwordHash createdAt updatedAt'
+      )
       .sort({ staffCode: 1, createdAt: 1 })
       .populate('department', 'name')
       .populate('team', 'name')
@@ -145,7 +147,17 @@ export const getAllStaff = async (req, res) => {
       .populate('hrId', 'firstName lastName staffCode')
       .lean();
 
-    res.json(staffList);
+    const safe = staffList.map((doc) => {
+      const { passwordHash, ...rest } = doc;
+      return {
+        ...rest,
+        passwordSetAt:
+          rest.passwordSetAt ||
+          (passwordHash ? rest.updatedAt || rest.createdAt : rest.passwordSetAt),
+      };
+    });
+
+    res.json(safe);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch staff list', details: err.message });
   }
@@ -208,7 +220,9 @@ export const getStaffById = async (req, res) => {
     await syncStaffCodeCounter();
 
     let staff = await Staff.findById(staffId)
-      .select('firstName lastName email phoneNumber position bio profilePhoto department team practiceAreas division teamLeadId lineManagerId hrId leaveEnabled hireDate confirmationDate isVisible employeeId staffCode roles createdAt updatedAt')
+      .select(
+        'firstName lastName email phoneNumber position bio profilePhoto department team practiceAreas division teamLeadId lineManagerId hrId leaveEnabled hireDate confirmationDate isVisible employeeId staffCode roles passwordSetAt lastInviteSentAt passwordHash createdAt updatedAt displayOrder'
+      )
       .populate('department', 'name')
       .populate('team', 'name')
       .populate('practiceAreas', 'name')
@@ -220,7 +234,16 @@ export const getStaffById = async (req, res) => {
 
     staff = await ensureStaffCode(staff);
 
-    res.json(staff);
+    const plain = staff.toObject();
+    const { passwordHash, ...rest } = plain;
+    const payload = {
+      ...rest,
+      passwordSetAt:
+        rest.passwordSetAt ||
+        (passwordHash ? rest.updatedAt || rest.createdAt : rest.passwordSetAt),
+    };
+
+    res.json(payload);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch staff', details: err.message });
   }

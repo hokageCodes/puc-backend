@@ -38,7 +38,8 @@ router.post('/logout', validateBody({ allowlist: ['scope', 'refreshToken'] }), l
 
 router.post('/invite', requireAuth({ scope: 'cms' }), requireRoles('admin', 'hr'), validateBody({ allowlist: ['email'], required: ['email'] }), sendInvite);
 router.post('/request-reset', resetRequestLimiter, validateBody({ allowlist: ['email'], required: ['email'] }), requestPasswordReset);
-router.post('/reset', validateBody({ allowlist: ['token', 'password'], required: ['token', 'password'] }), resetPassword);
-router.post('/activate', validateBody({ allowlist: ['token', 'password'], required: ['token', 'password'] }), activateAccount);
+// `email` is allowlisted but not required so older activate/reset UIs still work (middleware rejects unknown keys).
+router.post('/reset', validateBody({ allowlist: ['token', 'password', 'email'], required: ['token', 'password'] }), resetPassword);
+router.post('/activate', validateBody({ allowlist: ['token', 'password', 'email'], required: ['token', 'password'] }), activateAccount);
 
 export default router;

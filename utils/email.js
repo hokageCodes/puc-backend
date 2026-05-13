@@ -234,17 +234,32 @@ const baseUrl = (path = '') => {
 };
 
 export const buildActivationEmail = (user, token) => {
-  const url = baseUrl(`/leave/activate?token=${token}`);
+  const encoded = encodeURIComponent(token);
+  const url = baseUrl(`/leave/activate?token=${encoded}`);
   const name = user.firstName || user.email;
   return {
-    subject: 'Activate your PUC leave portal account',
-    text: `Hello ${name},\n\nUse the link below to set your password and activate your account:\n${url}\n\nThis link expires in 60 minutes. If you did not expect this email, please ignore it.`,
+    subject: 'Activate your PUC Hub account',
+    text: [
+      `Hello ${name},`,
+      '',
+      'Welcome to PUC Hub. One quick step unlocks your staff login for our in-house apps—leave, diary, admin tools, and anything else your role has access to.',
+      '',
+      `Open the secure link below, choose a password, and you are set for every Paul Usoro & Co system that uses this account:`,
+      url,
+      '',
+      'This link expires in 60 minutes. If you did not expect this email, you can ignore it.',
+      '',
+      '— PUC IT Team',
+    ].join('\n'),
     html: `
       <p>Hello ${name},</p>
-      <p>Use the link below to set your password and activate your account:</p>
-      <p><a href="${url}" target="_blank" rel="noopener noreferrer">Activate account</a></p>
-      <p>This link expires in 60 minutes. If you did not expect this email, please ignore it.</p>
-      <p>— Paul Udo &amp; Co</p>
+      <p><strong>Welcome to PUC Hub.</strong> One quick step unlocks your staff login for our in-house apps—leave, diary, admin tools, and whatever else your role has access to.</p>
+      <p>Open the button below, choose a password, and use that same login across Paul Usoro &amp; Co systems.</p>
+      <p style="margin: 24px 0;">
+        <a href="${url}" target="_blank" rel="noopener noreferrer" style="background: #059669; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: 600;">Activate my account</a>
+      </p>
+      <p style="color: #64748b; font-size: 14px;">This link expires in 60 minutes. If you did not expect this email, you can ignore it.</p>
+      <p style="margin-top: 24px; color: #64748b; font-size: 14px;">— <strong>PUC IT Team</strong></p>
     `,
   };
 };

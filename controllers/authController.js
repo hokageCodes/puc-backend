@@ -426,7 +426,8 @@ export const requestPasswordReset = async (req, res) => {
 
 export const resetPassword = async (req, res) => {
   try {
-    const { token, password } = req.body;
+    const token = String(req.body?.token || '').trim();
+    const password = req.body?.password;
     if (!token || !password) {
       return res.status(400).json({ message: 'Token and password are required' });
     }
@@ -464,7 +465,8 @@ export const resetPassword = async (req, res) => {
 
 export const activateAccount = async (req, res) => {
   try {
-    const { token, password } = req.body;
+    const token = String(req.body?.token || '').trim();
+    const password = req.body?.password;
     if (!token || !password) {
       return res.status(400).json({ message: 'Token and password are required' });
     }
