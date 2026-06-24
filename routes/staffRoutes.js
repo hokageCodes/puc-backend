@@ -70,7 +70,8 @@ const handleUpload = (validators, handler) => async (req, res, next) => {
 
 const router = express.Router();
 
-router.use(requireAuth({ scope: 'cms' }));
+// Accept the unified hub session alongside the legacy CMS session during migration.
+router.use(requireAuth({ scope: ['hub', 'cms'] }));
 router.use(requireRoles('admin', 'hr', 'cms'));
 
 const staffWriteAllowlist = [
