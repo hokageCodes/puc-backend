@@ -60,7 +60,7 @@ const StaffSchema = new mongoose.Schema(
     lastFailedLoginAt: { type: Date },
     refreshTokens: [
       {
-        scope: { type: String, enum: ['leave', 'cms'], required: true },
+        scope: { type: String, enum: ['leave', 'cms', 'hub'], required: true },
         tokenHash: { type: String, required: true },
         issuedAt: { type: Date, default: Date.now },
         expiresAt: { type: Date, required: true },

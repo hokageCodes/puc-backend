@@ -26,8 +26,19 @@ const getRefreshSecret = () => {
   return secret;
 };
 
-const scopeCookieName = (scope) => (scope === 'cms' ? 'cms_refresh_token' : 'leave_refresh_token');
-const scopeAccessCookieName = (scope) => (scope === 'cms' ? 'admin_token' : 'leave_access_token');
+// Refresh + access cookie names per scope. `hub` is the unified session; cms/leave are legacy.
+const REFRESH_COOKIE_BY_SCOPE = {
+  cms: 'cms_refresh_token',
+  leave: 'leave_refresh_token',
+  hub: 'hub_refresh_token',
+};
+const ACCESS_COOKIE_BY_SCOPE = {
+  cms: 'admin_token',
+  leave: 'leave_access_token',
+  hub: 'hub_access_token',
+};
+const scopeCookieName = (scope) => REFRESH_COOKIE_BY_SCOPE[scope] || REFRESH_COOKIE_BY_SCOPE.leave;
+const scopeAccessCookieName = (scope) => ACCESS_COOKIE_BY_SCOPE[scope] || ACCESS_COOKIE_BY_SCOPE.leave;
 
 const cookieOptions = {
   httpOnly: true,
@@ -71,6 +82,12 @@ const pickUserProfile = (staff) => ({
 });
 
 const validateScopeAccess = (staff, scope) => {
+  if (scope === 'hub') {
+    // Any authenticated staff may hold a hub session; per-feature authorization is
+    // enforced at the route level (requireRoles) and, for leave, by ensureLeaveEnrolled.
+    return;
+  }
+
   if (scope === 'cms') {
     const rawRoles = Array.isArray(staff.roles)
       ? staff.roles
@@ -158,9 +175,56 @@ const createPasswordToken = async (staff, { markInviteSent = false } = {}) => {
   return rawToken;
 };
 
-const respondWithTokens = async (res, staff, scope) => {
+// --- Refresh-token rotation & reuse detection -------------------------------
+// Every issued refresh token is recorded (by SHA-256 hash) on the Staff document.
+// On refresh we rotate: revoke the consumed token, issue + record a new one.
+// Presenting a token that was already revoked indicates replay/theft → the whole
+// family is revoked and tokenVersion is bumped (invalidating all sessions).
+const REFRESH_TOKEN_MAX_RECORDS = 20;
+const REVOKED_RETENTION_MS = 24 * 60 * 60 * 1000; // keep revoked records ~1 day for audit
+
+const recordRefreshToken = (staff, token, scope) => {
+  if (!Array.isArray(staff.refreshTokens)) staff.refreshTokens = [];
+  staff.refreshTokens.push({
+    scope,
+    tokenHash: hashToken(token),
+    issuedAt: new Date(),
+    expiresAt: new Date(Date.now() + REFRESH_COOKIE_MAX_AGE),
+  });
+};
+
+// Drop expired tokens and long-revoked records so the array stays bounded.
+const pruneRefreshTokens = (staff) => {
+  if (!Array.isArray(staff.refreshTokens)) {
+    staff.refreshTokens = [];
+    return;
+  }
+  const now = Date.now();
+  staff.refreshTokens = staff.refreshTokens.filter((r) => {
+    const expired = r.expiresAt && new Date(r.expiresAt).getTime() < now;
+    const longRevoked = r.revokedAt && now - new Date(r.revokedAt).getTime() > REVOKED_RETENTION_MS;
+    return !expired && !longRevoked;
+  });
+  if (staff.refreshTokens.length > REFRESH_TOKEN_MAX_RECORDS) {
+    staff.refreshTokens = staff.refreshTokens.slice(-REFRESH_TOKEN_MAX_RECORDS);
+  }
+};
+
+const respondWithTokens = async (res, staff, scope, { consumedTokenRecord = null } = {}) => {
   const accessToken = createAccessToken(staff, scope);
   const refreshToken = createRefreshToken(staff, scope);
+
+  // Rotation bookkeeping: revoke the consumed token (if any), record the new one,
+  // prune, then persist. validateBeforeSave is skipped to avoid re-running full
+  // document validation on an otherwise-unchanged record.
+  if (consumedTokenRecord) {
+    consumedTokenRecord.revokedAt = new Date();
+    consumedTokenRecord.revocationReason = 'rotated';
+  }
+  recordRefreshToken(staff, refreshToken, scope);
+  pruneRefreshTokens(staff);
+  await staff.save({ validateBeforeSave: false, timestamps: false });
+
   setAccessCookie(res, accessToken, scope);
   setRefreshCookie(res, refreshToken, scope);
 
@@ -312,6 +376,52 @@ export const refresh = async (req, res) => {
 
     validateScopeAccess(staff, requestedScope);
 
+    // --- Rotation & reuse detection ---
+    const presentedHash = hashToken(refreshToken);
+    const records = Array.isArray(staff.refreshTokens) ? staff.refreshTokens : [];
+    const matching = records.find((r) => r.tokenHash === presentedHash);
+
+    if (matching) {
+      if (matching.revokedAt) {
+        // Replay of an already-revoked token → treat as theft. Revoke every active
+        // token and bump tokenVersion so all outstanding access tokens die too.
+        records.forEach((r) => {
+          if (!r.revokedAt) {
+            r.revokedAt = new Date();
+            r.revocationReason = 'reuse_detected';
+          }
+        });
+        staff.tokenVersion = (staff.tokenVersion || 0) + 1;
+        await staff.save({ validateBeforeSave: false, timestamps: false });
+        clearRefreshCookie(res, requestedScope);
+        clearAccessCookie(res, requestedScope);
+        await logAudit('AUTH_REFRESH_REUSE', {
+          actorId: staff._id.toString(),
+          actorEmail: staff.email,
+          scope: requestedScope,
+          outcome: 'failure',
+          metadata: { reason: 'refresh_token_reuse' },
+          req,
+        }).catch(() => {});
+        return res.status(401).json({ message: 'Session expired' });
+      }
+
+      if (matching.expiresAt && new Date(matching.expiresAt).getTime() < Date.now()) {
+        matching.revokedAt = new Date();
+        matching.revocationReason = 'expired';
+        await staff.save({ validateBeforeSave: false, timestamps: false });
+        clearRefreshCookie(res, requestedScope);
+        return res.status(401).json({ message: 'Session expired' });
+      }
+
+      // Valid, active token → rotate it.
+      return respondWithTokens(res, staff, requestedScope, { consumedTokenRecord: matching });
+    }
+
+    // No matching record: a token issued before rotation tracking existed (legacy
+    // session), or one whose record was pruned. The JWT signature and tokenVersion
+    // are already verified above, so accept it once and adopt tracking — this keeps
+    // existing sessions alive across the rollout instead of mass-logging-out users.
     return respondWithTokens(res, staff, requestedScope);
   } catch (err) {
     console.error('Refresh error:', err);

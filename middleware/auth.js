@@ -12,20 +12,41 @@ const getAccessSecret = () => {
   return secret;
 };
 
-const getTokenFromRequest = (req, scope) => {
+// Access-token cookie name per scope. Hub is the unified session; cms/leave are legacy.
+const ACCESS_COOKIE_BY_SCOPE = {
+  cms: 'admin_token',
+  leave: 'leave_access_token',
+  hub: 'hub_access_token',
+};
+
+const getTokenFromRequest = (req, allowedScopes) => {
   const headerToken = req.headers.authorization?.startsWith('Bearer ')
     ? req.headers.authorization.split(' ')[1]
     : null;
+  if (headerToken) return headerToken;
 
-  const cookieName = scope === 'cms' ? 'admin_token' : 'leave_access_token';
-  const cookieToken = req.cookies?.[cookieName] || null;
-
-  return headerToken || cookieToken;
+  // Fall back to the first matching scoped cookie (Authorization header is preferred).
+  for (const scope of allowedScopes) {
+    const cookieName = ACCESS_COOKIE_BY_SCOPE[scope];
+    if (cookieName && req.cookies?.[cookieName]) {
+      return req.cookies[cookieName];
+    }
+  }
+  return null;
 };
 
-export const requireAuth = ({ scope = 'leave' } = {}) => async (req, res, next) => {
+/**
+ * `scope` may be a single scope ('hub' | 'cms' | 'leave') or an array of accepted
+ * scopes (e.g. ['hub','leave']). A token is accepted if its own `scope` claim is in
+ * the allowed set. This lets routes accept the unified hub session alongside their
+ * legacy scope during migration without breaking existing tokens.
+ */
+export const requireAuth = ({ scope = 'leave' } = {}) => {
+  const allowedScopes = Array.isArray(scope) ? scope : [scope];
+
+  return async (req, res, next) => {
   try {
-    const token = getTokenFromRequest(req, scope);
+    const token = getTokenFromRequest(req, allowedScopes);
     if (!token) {
       return res.status(401).json({ message: 'Not authorized, no token provided' });
     }
@@ -37,9 +58,13 @@ export const requireAuth = ({ scope = 'leave' } = {}) => async (req, res, next) 
       return res.status(401).json({ message: 'Invalid or expired token' });
     }
 
-    if (decoded.scope && decoded.scope !== scope) {
+    if (decoded.scope && !allowedScopes.includes(decoded.scope)) {
       return res.status(403).json({ message: 'Invalid token scope for this resource' });
     }
+
+    // Validate against the token's own scope (it was minted for that scope's
+    // constraints); fall back to the first allowed scope for legacy tokens.
+    const effectiveScope = decoded.scope || allowedScopes[0];
 
     const userId = decoded.sub || decoded.id;
     let staff = await Staff.findById(userId);
@@ -62,7 +87,7 @@ export const requireAuth = ({ scope = 'leave' } = {}) => async (req, res, next) 
         teamLeadId: staff.teamLeadId,
         lineManagerId: staff.lineManagerId,
       };
-    } else if (scope === 'cms') {
+    } else if (allowedScopes.includes('cms')) {
       const legacyAdmin = await Admin.findById(userId);
       if (!legacyAdmin || !legacyAdmin.isAdmin) {
         return res.status(401).json({ message: 'User not found' });
@@ -80,7 +105,7 @@ export const requireAuth = ({ scope = 'leave' } = {}) => async (req, res, next) 
       return res.status(401).json({ message: 'User not found' });
     }
 
-    validateScopeAccess(req.user, scope);
+    validateScopeAccess(req.user, effectiveScope);
 
     next();
   } catch (err) {
@@ -88,6 +113,7 @@ export const requireAuth = ({ scope = 'leave' } = {}) => async (req, res, next) 
     const status = err.status || 500;
     res.status(status).json({ message: err.message || 'Not authorized' });
   }
+  };
 };
 
 const validateScopeAccess = (user, scope) => {
