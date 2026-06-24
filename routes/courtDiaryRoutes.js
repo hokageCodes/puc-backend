@@ -13,7 +13,8 @@ import { validateBody } from '../middleware/validation.js';
 
 const router = express.Router();
 
-router.use(requireAuth({ scope: 'leave' }));
+// Accept the unified hub session alongside the legacy leave session during migration.
+router.use(requireAuth({ scope: ['hub', 'leave'] }));
 router.use(ensureLeaveEnrolled);
 router.use(requireRoles('admin', 'hr', 'lineManager', 'teamLead', 'staff'));
 
