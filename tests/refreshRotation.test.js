@@ -119,6 +119,24 @@ describe('refresh-token rotation & reuse detection', () => {
     expect(res.clearedCookies.length).toBeGreaterThanOrEqual(2); // access + refresh cleared
   });
 
+  it('treats a just-rotated token reused within the grace window as concurrent refresh (no logout)', async () => {
+    const staffDoc = baseStaff({
+      tokenVersion: 5,
+      refreshTokens: [
+        // rotated moments ago (within grace) — e.g. StrictMode/multi-tab double refresh
+        { scope: 'leave', tokenHash: hashToken('rt-justrotated'), revokedAt: new Date(), revocationReason: 'rotated', expiresAt: future() },
+        { scope: 'leave', tokenHash: hashToken('rt-current'), issuedAt: new Date(), expiresAt: future() },
+      ],
+    });
+
+    const res = await runRefresh(staffDoc, 'rt-justrotated', 5);
+
+    expect(res.statusCode).toBe(200);
+    expect(staffDoc.tokenVersion).toBe(5); // NOT bumped — no theft response
+    const current = staffDoc.refreshTokens.find((r) => r.tokenHash === hashToken('rt-current'));
+    expect(current.revokedAt).toBeUndefined(); // family left intact
+  });
+
   it('adopts a valid but untracked (legacy) token without logging the user out', async () => {
     const staffDoc = baseStaff({ refreshTokens: [] });
 

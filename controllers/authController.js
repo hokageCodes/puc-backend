@@ -182,6 +182,9 @@ const createPasswordToken = async (staff, { markInviteSent = false } = {}) => {
 // family is revoked and tokenVersion is bumped (invalidating all sessions).
 const REFRESH_TOKEN_MAX_RECORDS = 20;
 const REVOKED_RETENTION_MS = 24 * 60 * 60 * 1000; // keep revoked records ~1 day for audit
+// Window during which a just-rotated token presented again is treated as a concurrent
+// refresh (multi-tab / double-load / StrictMode) rather than token theft.
+const ROTATION_GRACE_MS = 60 * 1000; // 60 seconds
 
 const recordRefreshToken = (staff, token, scope) => {
   if (!Array.isArray(staff.refreshTokens)) staff.refreshTokens = [];
@@ -415,8 +418,18 @@ export const refresh = async (req, res) => {
 
     if (matching) {
       if (matching.revokedAt) {
-        // Replay of an already-revoked token → treat as theft. Revoke every active
-        // token and bump tokenVersion so all outstanding access tokens die too.
+        // Grace window: a token that was *rotated* only moments ago and is presented
+        // again is almost always a concurrent/duplicate refresh — multiple tabs, a
+        // quick double page-load, or React StrictMode double-invoking effects in dev —
+        // NOT theft. Re-issue a fresh token without revoking the family or bumping
+        // tokenVersion, so legitimate users are never logged out by a refresh race.
+        const revokedAgeMs = Date.now() - new Date(matching.revokedAt).getTime();
+        if (matching.revocationReason === 'rotated' && revokedAgeMs <= ROTATION_GRACE_MS) {
+          return respondWithTokens(res, staff, requestedScope);
+        }
+
+        // Replay of an old or non-rotated revoked token → treat as theft. Revoke every
+        // active token and bump tokenVersion so all outstanding access tokens die too.
         records.forEach((r) => {
           if (!r.revokedAt) {
             r.revokedAt = new Date();
