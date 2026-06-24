@@ -210,6 +210,32 @@ const pruneRefreshTokens = (staff) => {
   }
 };
 
+// Build the full user profile (identity + org names + reporting relationships).
+// Shared by login/refresh (respondWithTokens) and the /auth/me endpoint so all
+// three return an identical shape.
+const buildUserProfile = async (staff) => {
+  // Team / department names come from Team + Department collections (Staff.team → Team).
+  const org = await Staff.findById(staff._id).populate('team', 'name').populate('department', 'name').lean();
+
+  // Resolve reporting relationships so the leave frontend can display approver names.
+  const teamLead = staff.teamLeadId ? await Staff.findById(staff.teamLeadId).select('firstName lastName email') : null;
+  const lineManager = staff.lineManagerId ? await Staff.findById(staff.lineManagerId).select('firstName lastName email') : null;
+  const hr = staff.hrId ? await Staff.findById(staff.hrId).select('firstName lastName email') : null;
+
+  return {
+    ...pickUserProfile(staff),
+    team: org?.team ? { id: org.team._id, name: org.team.name } : null,
+    department: org?.department ? { id: org.department._id, name: org.department.name } : null,
+    teamLead: teamLead
+      ? { id: teamLead._id, firstName: teamLead.firstName, lastName: teamLead.lastName, email: teamLead.email }
+      : null,
+    lineManager: lineManager
+      ? { id: lineManager._id, firstName: lineManager.firstName, lastName: lineManager.lastName, email: lineManager.email }
+      : null,
+    hr: hr ? { id: hr._id, firstName: hr.firstName, lastName: hr.lastName, email: hr.email } : null,
+  };
+};
+
 const respondWithTokens = async (res, staff, scope, { consumedTokenRecord = null } = {}) => {
   const accessToken = createAccessToken(staff, scope);
   const refreshToken = createRefreshToken(staff, scope);
@@ -228,39 +254,45 @@ const respondWithTokens = async (res, staff, scope, { consumedTokenRecord = null
   setAccessCookie(res, accessToken, scope);
   setRefreshCookie(res, refreshToken, scope);
 
-  // Team / department names come from Team + Department collections (Staff.team → Team).
-  const org = await Staff.findById(staff._id).populate('team', 'name').populate('department', 'name').lean();
-
-  // Resolve reporting relationships so the leave frontend can display approver names
-  const teamLead = staff.teamLeadId ? await Staff.findById(staff.teamLeadId).select('firstName lastName email') : null;
-  const lineManager = staff.lineManagerId ? await Staff.findById(staff.lineManagerId).select('firstName lastName email') : null;
-  const hr = staff.hrId ? await Staff.findById(staff.hrId).select('firstName lastName email') : null;
-
-  const teamPayload = org?.team
-    ? { id: org.team._id, name: org.team.name }
-    : null;
-  const departmentPayload = org?.department
-    ? { id: org.department._id, name: org.department.name }
-    : null;
-
-  const userProfile = {
-    ...pickUserProfile(staff),
-    team: teamPayload,
-    department: departmentPayload,
-    teamLead: teamLead
-      ? { id: teamLead._id, firstName: teamLead.firstName, lastName: teamLead.lastName, email: teamLead.email }
-      : null,
-    lineManager: lineManager
-      ? { id: lineManager._id, firstName: lineManager.firstName, lastName: lineManager.lastName, email: lineManager.email }
-      : null,
-    hr: hr ? { id: hr._id, firstName: hr.firstName, lastName: hr.lastName, email: hr.email } : null,
-  };
+  const userProfile = await buildUserProfile(staff);
 
   return res.json({
     accessToken,
     scope,
     user: userProfile,
   });
+};
+
+// GET /api/auth/me — identify the current session. Works for any active scope
+// (hub/cms/leave). req.user is populated by requireAuth.
+export const getMe = async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: 'Not authenticated' });
+    }
+
+    const staff = await Staff.findById(req.user.id);
+    if (!staff) {
+      // Legacy Admin-collection account (no Staff record). Return the basic profile
+      // resolved by the auth middleware so /auth/me still works during transition.
+      return res.json({
+        user: {
+          id: req.user.id,
+          email: req.user.email,
+          roles: req.user.roles || [],
+          division: req.user.division,
+          staffCode: req.user.staffCode,
+          leaveEnabled: req.user.leaveEnabled,
+        },
+      });
+    }
+
+    const user = await buildUserProfile(staff);
+    return res.json({ user });
+  } catch (err) {
+    console.error('getMe error:', err);
+    return res.status(500).json({ message: 'Unable to load profile' });
+  }
 };
 
 export const login = async (req, res) => {
