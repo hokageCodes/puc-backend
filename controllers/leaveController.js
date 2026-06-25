@@ -5,6 +5,7 @@ import LeaveRequest from '../models/LeaveRequest.js';
 import Staff from '../models/Staff.js';
 import { sendEmail } from '../utils/email.js';
 import { logAudit } from '../utils/auditLogger.js';
+import { calculateDurationDays } from '../utils/leaveDays.js';
 import {
   buildLeaveRequestNotificationEmail,
   buildLeaveApprovedEmail,
@@ -33,27 +34,6 @@ const currentPeriod = (date = new Date()) => {
   return year;
 };
 
-const calculateDurationDays = (startDate, endDate, halfDay) => {
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-    throw new Error('Invalid start or end date');
-  }
-
-  if (start > end) {
-    throw new Error('Start date must be before end date');
-  }
-
-  const diff = Math.floor((end.setHours(0, 0, 0, 0) - start.setHours(0, 0, 0, 0)) / MS_PER_DAY) + 1;
-  const base = Math.max(diff, 1);
-
-  if (halfDay === 'first' || halfDay === 'second') {
-    return Math.max(base - 0.5, 0.5);
-  }
-
-  return base;
-};
 
 const ensureLeaveBalance = async (staffId, leaveType, period, options = {}) => {
   const { session } = options;
@@ -289,6 +269,9 @@ export const createLeaveRequest = async (req, res) => {
     }
 
     const durationDays = calculateDurationDays(startDate, endDate, halfDay);
+    if (!durationDays || durationDays <= 0) {
+      return res.status(400).json({ message: 'The selected dates contain no working days (weekends are not counted).' });
+    }
 
     const startDateObj = new Date(startDate);
     if (isNaN(startDateObj.getTime())) {
