@@ -99,6 +99,8 @@ app.use(cors({
     callback(new Error(`CORS: origin ${origin} not allowed`));
   },
   credentials: true,
+  // Let the browser read pagination metadata on cross-origin responses.
+  exposedHeaders: ['X-Total-Pages'],
 }));
 
 // FIXED: Proper conditional body parsing middleware
