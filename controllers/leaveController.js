@@ -194,7 +194,12 @@ export const getMyBalances = async (req, res) => {
   try {
     const period = currentPeriod();
     const staffId = req.user.id;
-    const types = await LeaveType.find({ isActive: true }).lean();
+
+    // Only show balances for leave types the staffer is eligible for, so e.g. a male
+    // never sees a Maternity balance (and no maternity balance record is created for him).
+    const staff = await Staff.findById(staffId).select('gender').lean();
+    const allTypes = await LeaveType.find({ isActive: true }).lean();
+    const types = allTypes.filter((type) => canUseLeaveType(type, staff?.gender));
     const typeIds = types.map((t) => t._id);
 
     // Bulk fetch — one query instead of N
