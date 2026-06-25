@@ -9,6 +9,9 @@ import {
   getMyApprovals,
   approveLeaveRequest,
   rejectLeaveRequest,
+  requestWithdrawal,
+  confirmWithdrawal,
+  declineWithdrawal,
   getCalendarData,
   getAttachment,
 } from '../controllers/leaveController.js';
@@ -107,5 +110,10 @@ router.get('/approvals', getPendingApprovals);
 router.get('/approvals/history', getMyApprovals);
 router.post('/requests/:id/approve', requireRoles('teamLead', 'lineManager', 'hr'), validateBody({ allowlist: ['comment'] }), approveLeaveRequest);
 router.post('/requests/:id/reject', requireRoles('teamLead', 'lineManager', 'hr'), validateBody({ allowlist: ['comment'] }), rejectLeaveRequest);
+
+// Withdrawal: staff withdraws their own request; managers confirm/decline an approved one.
+router.post('/requests/:id/withdraw', validateBody({ allowlist: ['reason'] }), requestWithdrawal);
+router.post('/requests/:id/withdraw/confirm', requireRoles('teamLead', 'lineManager', 'hr', 'admin'), validateBody({ allowlist: ['comment'] }), confirmWithdrawal);
+router.post('/requests/:id/withdraw/decline', requireRoles('teamLead', 'lineManager', 'hr', 'admin'), validateBody({ allowlist: ['comment'] }), declineWithdrawal);
 
 export default router;
