@@ -5,6 +5,8 @@ import LeaveRequest from '../models/LeaveRequest.js';
 import Staff from '../models/Staff.js';
 import { sendEmail } from '../utils/email.js';
 import { logAudit } from '../utils/auditLogger.js';
+import { calculateDurationDays } from '../utils/leaveDays.js';
+import { leaveTypeRequiredGender, canUseLeaveType } from '../utils/leaveTypeGender.js';
 import {
   buildLeaveRequestNotificationEmail,
   buildLeaveApprovedEmail,
@@ -33,27 +35,6 @@ const currentPeriod = (date = new Date()) => {
   return year;
 };
 
-const calculateDurationDays = (startDate, endDate, halfDay) => {
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-    throw new Error('Invalid start or end date');
-  }
-
-  if (start > end) {
-    throw new Error('Start date must be before end date');
-  }
-
-  const diff = Math.floor((end.setHours(0, 0, 0, 0) - start.setHours(0, 0, 0, 0)) / MS_PER_DAY) + 1;
-  const base = Math.max(diff, 1);
-
-  if (halfDay === 'first' || halfDay === 'second') {
-    return Math.max(base - 0.5, 0.5);
-  }
-
-  return base;
-};
 
 const ensureLeaveBalance = async (staffId, leaveType, period, options = {}) => {
   const { session } = options;
@@ -196,7 +177,13 @@ const appendTimeline = (request, event, actorId, note) => {
 export const listLeaveTypes = async (req, res) => {
   try {
     const types = await LeaveType.find({ isActive: true }).sort({ name: 1 }).lean();
-    res.json(types);
+
+    // Hide gender-restricted types that don't match the staffer's gender. Staff with
+    // no recorded gender see no gender-restricted types (e.g. neither maternity nor paternity).
+    const staff = await Staff.findById(req.user.id).select('gender').lean();
+    const visible = types.filter((type) => canUseLeaveType(type, staff?.gender));
+
+    res.json(visible);
   } catch (err) {
     console.error('listLeaveTypes error:', err);
     res.status(500).json({ message: 'Failed to load leave types.' });
@@ -207,7 +194,12 @@ export const getMyBalances = async (req, res) => {
   try {
     const period = currentPeriod();
     const staffId = req.user.id;
-    const types = await LeaveType.find({ isActive: true }).lean();
+
+    // Only show balances for leave types the staffer is eligible for, so e.g. a male
+    // never sees a Maternity balance (and no maternity balance record is created for him).
+    const staff = await Staff.findById(staffId).select('gender').lean();
+    const allTypes = await LeaveType.find({ isActive: true }).lean();
+    const types = allTypes.filter((type) => canUseLeaveType(type, staff?.gender));
     const typeIds = types.map((t) => t._id);
 
     // Bulk fetch — one query instead of N
@@ -238,6 +230,107 @@ export const getMyBalances = async (req, res) => {
   } catch (err) {
     console.error('getMyBalances error:', err);
     res.status(500).json({ message: 'Failed to load leave balances.' });
+  }
+};
+
+// --- HR/admin: view & override a specific staffer's balances -----------------
+
+// GET /api/leave-admin/staff/:staffId/balances
+export const adminGetStaffBalances = async (req, res) => {
+  try {
+    const { staffId } = req.params;
+    const staff = await Staff.findById(staffId).select('firstName lastName email staffCode gender leaveEnabled').lean();
+    if (!staff) return res.status(404).json({ message: 'Staff not found.' });
+
+    const period = currentPeriod();
+    const allTypes = await LeaveType.find({ isActive: true }).lean();
+    const types = allTypes.filter((type) => canUseLeaveType(type, staff.gender));
+
+    const balances = await Promise.all(
+      types.map(async (type) => {
+        const existing = await LeaveBalance.findOne({ staff: staffId, leaveType: type._id, period }).lean();
+        const b = existing || (await ensureLeaveBalance(staffId, type, period)).toObject?.() || { allocated: 0, carriedOver: 0, used: 0, pending: 0 };
+        return {
+          type: { id: type._id, name: type.name, code: type.code, applicableGender: type.applicableGender },
+          period,
+          allocated: b.allocated || 0,
+          carriedOver: b.carriedOver || 0,
+          used: b.used || 0,
+          pending: b.pending || 0,
+          remaining: (b.allocated || 0) + (b.carriedOver || 0) - (b.used || 0),
+        };
+      })
+    );
+
+    res.json({ staff: { id: staff._id, name: `${staff.firstName} ${staff.lastName}`.trim(), email: staff.email, staffCode: staff.staffCode, gender: staff.gender }, period, balances });
+  } catch (err) {
+    console.error('adminGetStaffBalances error:', err);
+    res.status(500).json({ message: 'Failed to load staff balances.' });
+  }
+};
+
+// PUT /api/leave-admin/staff/:staffId/balances/:leaveTypeId
+// Body: { allocated, carriedOver, used, reason? } — manual HR override.
+export const adminSetStaffBalance = async (req, res) => {
+  try {
+    const { staffId, leaveTypeId } = req.params;
+    const period = currentPeriod();
+
+    const staff = await Staff.findById(staffId).select('gender').lean();
+    if (!staff) return res.status(404).json({ message: 'Staff not found.' });
+    const type = await LeaveType.findById(leaveTypeId).lean();
+    if (!type) return res.status(404).json({ message: 'Leave type not found.' });
+    if (!canUseLeaveType(type, staff.gender)) {
+      return res.status(400).json({ message: 'This leave type does not apply to this staff member.' });
+    }
+
+    const num = (v) => (v === undefined || v === null || v === '' ? undefined : Number(v));
+    const allocated = num(req.body.allocated);
+    const carriedOver = num(req.body.carriedOver);
+    const used = num(req.body.used);
+
+    for (const [k, v] of Object.entries({ allocated, carriedOver, used })) {
+      if (v !== undefined && (Number.isNaN(v) || v < 0)) {
+        return res.status(400).json({ message: `${k} must be a number ≥ 0.` });
+      }
+    }
+
+    let balance = await LeaveBalance.findOne({ staff: staffId, leaveType: leaveTypeId, period });
+    if (!balance) balance = await ensureLeaveBalance(staffId, type, period);
+
+    const before = { allocated: balance.allocated, carriedOver: balance.carriedOver, used: balance.used };
+    if (allocated !== undefined) balance.allocated = allocated;
+    if (carriedOver !== undefined) balance.carriedOver = carriedOver;
+    if (used !== undefined) balance.used = used;
+
+    balance.adjustments = balance.adjustments || [];
+    balance.adjustments.push({
+      amount: (balance.allocated || 0) - (before.allocated || 0),
+      reason: (req.body.reason || 'Manual override (HR/admin)').toString().slice(0, 200),
+      addedBy: req.user.id,
+    });
+    balance.lastReconciledAt = new Date();
+    await balance.save();
+
+    await logAudit('LEAVE_BALANCE_OVERRIDE', {
+      actorId: req.user.id,
+      actorEmail: req.user.email,
+      metadata: { staffId, leaveTypeId, period, before, after: { allocated: balance.allocated, carriedOver: balance.carriedOver, used: balance.used } },
+      req,
+    }).catch(() => {});
+
+    res.json({
+      type: { id: type._id, name: type.name, code: type.code },
+      period,
+      allocated: balance.allocated,
+      carriedOver: balance.carriedOver,
+      used: balance.used,
+      pending: balance.pending || 0,
+      remaining: (balance.allocated || 0) + (balance.carriedOver || 0) - (balance.used || 0),
+    });
+  } catch (err) {
+    console.error('adminSetStaffBalance error:', err);
+    res.status(500).json({ message: 'Failed to update balance.' });
   }
 };
 
@@ -288,7 +381,17 @@ export const createLeaveRequest = async (req, res) => {
       return res.status(404).json({ message: 'Staff profile not found.' });
     }
 
+    // Enforce gender-restricted leave types (e.g. maternity → female, paternity → male).
+    // Staff with no recorded gender cannot take a gender-restricted type.
+    const requiredGender = leaveTypeRequiredGender(leaveType);
+    if (requiredGender && staff.gender !== requiredGender) {
+      return res.status(403).json({ message: 'This leave type is not available for your profile.' });
+    }
+
     const durationDays = calculateDurationDays(startDate, endDate, halfDay);
+    if (!durationDays || durationDays <= 0) {
+      return res.status(400).json({ message: 'The selected dates contain no working days (weekends are not counted).' });
+    }
 
     const startDateObj = new Date(startDate);
     if (isNaN(startDateObj.getTime())) {

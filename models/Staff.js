@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 
 const STAFF_DIVISIONS = ['legal', 'admin', 'other'];
+const STAFF_GENDERS = ['male', 'female'];
 const AUTH_PROVIDERS = ['local'];
 
 const StaffSchema = new mongoose.Schema(
@@ -13,6 +14,9 @@ const StaffSchema = new mongoose.Schema(
     profilePhoto: { type: String, default: '' },
     bio: { type: String },
     position: { type: String },
+
+    /** Used for entitlement rules such as maternity/paternity leave. */
+    gender: { type: String, enum: STAFF_GENDERS, default: undefined },
 
     employeeId: { type: String, unique: true, sparse: true },
     staffCode: { type: String },
@@ -60,7 +64,7 @@ const StaffSchema = new mongoose.Schema(
     lastFailedLoginAt: { type: Date },
     refreshTokens: [
       {
-        scope: { type: String, enum: ['leave', 'cms'], required: true },
+        scope: { type: String, enum: ['leave', 'cms', 'hub'], required: true },
         tokenHash: { type: String, required: true },
         issuedAt: { type: Date, default: Date.now },
         expiresAt: { type: Date, required: true },

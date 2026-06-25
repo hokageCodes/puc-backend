@@ -29,6 +29,9 @@ export const SCOPE_ROLE_MAP = Object.freeze({
     ROLES.TEAM_LEAD,
     ROLES.STAFF,
   ]),
+  // Unified Hub session: any authenticated staff may hold a hub session.
+  // Per-feature authorization is enforced at the route level via requireRoles(...).
+  hub: new Set(ALL_ROLES),
 });
 
 export const hasAnyRole = (userRoles = [], allowedRoles = []) => {

@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import { OFFICE_LOCATION_KEYS } from '../config/officeLocations.js';
 // Only allow these fields to be set by non-admins
 const STAFF_SAFE_FIELDS = [
-  'firstName', 'lastName', 'email', 'phoneNumber', 'position', 'bio', 'profilePhoto',
+  'firstName', 'lastName', 'email', 'phoneNumber', 'position', 'bio', 'profilePhoto', 'gender',
   'department', 'team', 'practiceAreas', 'division', 'officeLocation', 'teamLeadId', 'lineManagerId', 'hrId',
   'leaveEnabled', 'hireDate', 'confirmationDate', 'isVisible', 'employeeId',
 ];
@@ -146,7 +146,7 @@ export const getAllStaff = async (req, res) => {
     // Only select non-sensitive fields
     const staffList = await Staff.find()
       .select(
-        'firstName lastName email phoneNumber position bio profilePhoto department team practiceAreas division officeLocation teamLeadId lineManagerId hrId leaveEnabled hireDate confirmationDate isVisible employeeId staffCode roles passwordSetAt lastInviteSentAt passwordHash createdAt updatedAt'
+        'firstName lastName email phoneNumber position bio profilePhoto gender department team practiceAreas division officeLocation teamLeadId lineManagerId hrId leaveEnabled hireDate confirmationDate isVisible employeeId staffCode roles passwordSetAt lastInviteSentAt passwordHash createdAt updatedAt'
       )
       .sort({ staffCode: 1, createdAt: 1 })
       .populate('department', 'name')
@@ -231,7 +231,7 @@ export const getStaffById = async (req, res) => {
 
     let staff = await Staff.findById(staffId)
       .select(
-        'firstName lastName email phoneNumber position bio profilePhoto department team practiceAreas division officeLocation teamLeadId lineManagerId hrId leaveEnabled hireDate confirmationDate isVisible employeeId staffCode roles passwordSetAt lastInviteSentAt passwordHash createdAt updatedAt displayOrder'
+        'firstName lastName email phoneNumber position bio profilePhoto gender department team practiceAreas division officeLocation teamLeadId lineManagerId hrId leaveEnabled hireDate confirmationDate isVisible employeeId staffCode roles passwordSetAt lastInviteSentAt passwordHash createdAt updatedAt displayOrder'
       )
       .populate('department', 'name')
       .populate('team', 'name')

@@ -26,7 +26,9 @@ const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
   'image/png',
 ]);
 
-router.use(requireAuth({ scope: 'leave' }));
+// Accept the unified hub session as well as the legacy leave session during
+// migration. ensureLeaveEnrolled still gates on leaveEnabled regardless of scope.
+router.use(requireAuth({ scope: ['hub', 'leave'] }));
 router.use(ensureLeaveEnrolled);
 
 router.get('/types', listLeaveTypes);

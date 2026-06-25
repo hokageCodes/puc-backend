@@ -11,7 +11,7 @@ import {
   toggleBlogLike,
   getBlogLikeStatus
 } from '../controllers/blogController.js';
-import { protect, requireRoles } from '../middleware/auth.js';
+import { requireAuth, requireRoles } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validation.js';
 
 const ALLOWED_IMAGE_MIME_TYPES = new Set([
@@ -69,10 +69,13 @@ const uploadToCloudinary = (folder) => async (req, res, next) => {
 
 const router = express.Router();
 
+// Accept the unified hub session alongside the legacy CMS session during migration.
+const cmsOrHub = requireAuth({ scope: ['hub', 'cms'] });
+
 // Admin routes (protected) — MUST come before /:slug route
 router.post(
   '/upload-image',
-  protect,
+  cmsOrHub,
   requireRoles('admin', 'cms'),
   upload.single('image'),
   handleUploadError,
@@ -85,7 +88,7 @@ router.post(
 
 router.post(
   '/',
-  protect,
+  cmsOrHub,
   requireRoles('admin', 'cms'),
   upload.single('coverImage'),
   handleUploadError,
@@ -99,7 +102,7 @@ router.post(
 
 router.put(
   '/:id',
-  protect,
+  cmsOrHub,
   requireRoles('admin', 'cms'),
   upload.single('coverImage'),
   handleUploadError,
@@ -108,9 +111,9 @@ router.put(
   updateBlog
 );
 
-router.delete('/:id', protect, requireRoles('admin', 'cms'), deleteBlog);
-router.get('/admin/all', protect, requireRoles('admin', 'cms'), getAllBlogs);
-router.get('/id/:id', protect, async (req, res) => {
+router.delete('/:id', cmsOrHub, requireRoles('admin', 'cms'), deleteBlog);
+router.get('/admin/all', cmsOrHub, requireRoles('admin', 'cms'), getAllBlogs);
+router.get('/id/:id', cmsOrHub, async (req, res) => {
   const { getBlogById } = await import('../controllers/blogController.js');
   getBlogById(req, res);
 });

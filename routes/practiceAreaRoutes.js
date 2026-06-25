@@ -9,7 +9,7 @@ import { requireAuth, requireRoles } from '../middleware/auth.js';
 
 const router = express.Router();
 
-router.use(requireAuth({ scope: 'cms' }));
+router.use(requireAuth({ scope: ['hub', 'cms'] }));
 
 router.get('/', requireRoles('admin', 'hr', 'cms'), getPracticeAreas);
 router.get('/:id', requireRoles('admin', 'hr', 'cms'), getPracticeAreaById);

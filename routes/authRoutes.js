@@ -4,6 +4,7 @@ import {
   login,
   refresh,
   logout,
+  getMe,
   sendInvite,
   requestPasswordReset,
   resetPassword,
@@ -35,6 +36,10 @@ const resetRequestLimiter = rateLimit({
 router.post('/login', loginLimiter, validateBody({ allowlist: ['email', 'password', 'scope'], required: ['email', 'password'] }), login);
 router.post('/refresh', validateBody({ allowlist: ['scope', 'refreshToken'] }), refresh);
 router.post('/logout', validateBody({ allowlist: ['scope', 'refreshToken'] }), logout);
+
+// Identify the current session. Accepts any active scope so the (transitional)
+// admin/leave sessions and the unified hub session can all self-identify.
+router.get('/me', requireAuth({ scope: ['hub', 'cms', 'leave'] }), getMe);
 
 router.post('/invite', requireAuth({ scope: 'cms' }), requireRoles('admin', 'hr'), validateBody({ allowlist: ['email'], required: ['email'] }), sendInvite);
 router.post('/request-reset', resetRequestLimiter, validateBody({ allowlist: ['email'], required: ['email'] }), requestPasswordReset);
