@@ -6,6 +6,7 @@ import Staff from '../models/Staff.js';
 import { sendEmail } from '../utils/email.js';
 import { logAudit } from '../utils/auditLogger.js';
 import { calculateDurationDays } from '../utils/leaveDays.js';
+import { leaveTypeRequiredGender, canUseLeaveType } from '../utils/leaveTypeGender.js';
 import {
   buildLeaveRequestNotificationEmail,
   buildLeaveApprovedEmail,
@@ -176,7 +177,13 @@ const appendTimeline = (request, event, actorId, note) => {
 export const listLeaveTypes = async (req, res) => {
   try {
     const types = await LeaveType.find({ isActive: true }).sort({ name: 1 }).lean();
-    res.json(types);
+
+    // Hide gender-restricted types that don't match the staffer's gender. Staff with
+    // no recorded gender see no gender-restricted types (e.g. neither maternity nor paternity).
+    const staff = await Staff.findById(req.user.id).select('gender').lean();
+    const visible = types.filter((type) => canUseLeaveType(type, staff?.gender));
+
+    res.json(visible);
   } catch (err) {
     console.error('listLeaveTypes error:', err);
     res.status(500).json({ message: 'Failed to load leave types.' });
@@ -266,6 +273,13 @@ export const createLeaveRequest = async (req, res) => {
     const staff = await Staff.findById(req.user.id).populate('teamLeadId lineManagerId hrId');
     if (!staff) {
       return res.status(404).json({ message: 'Staff profile not found.' });
+    }
+
+    // Enforce gender-restricted leave types (e.g. maternity → female, paternity → male).
+    // Staff with no recorded gender cannot take a gender-restricted type.
+    const requiredGender = leaveTypeRequiredGender(leaveType);
+    if (requiredGender && staff.gender !== requiredGender) {
+      return res.status(403).json({ message: 'This leave type is not available for your profile.' });
     }
 
     const durationDays = calculateDurationDays(startDate, endDate, halfDay);
