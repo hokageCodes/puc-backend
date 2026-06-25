@@ -6,6 +6,17 @@
 
 export const COURT_DIARY_SCOPES = ['team', 'department'];
 
+/**
+ * Whether a department uses the court diary at all. Court diary is a Litigation tool,
+ * so only departments with a courtDiaryScope set (or named "Litigation") qualify.
+ * Staff in any other department have no court diary.
+ */
+export function isCourtDiaryDepartment(department) {
+  if (!department) return false;
+  if (department.courtDiaryScope === 'team' || department.courtDiaryScope === 'department') return true;
+  return String(department.name || '').toLowerCase().includes('litigation');
+}
+
 export function isTeamScopedDiaryDepartment(department) {
   if (!department) return false;
   if (department.courtDiaryScope === 'team') return true;

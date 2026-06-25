@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import CourtDiaryEntry from '../models/CourtDiaryEntry.js';
 import Staff from '../models/Staff.js';
-import { diaryEntriesBaseFilter, isTeamScopedDiaryDepartment } from '../utils/courtDiaryScope.js';
+import { diaryEntriesBaseFilter, isCourtDiaryDepartment, isTeamScopedDiaryDepartment } from '../utils/courtDiaryScope.js';
 import {
   filterSemanticDuplicates,
   normalizeAppearanceTime,
@@ -125,6 +125,10 @@ const resolveRequesterScope = async (userId) => {
     .lean();
   if (!staff) {
     return { error: { status: 404, message: 'Staff profile not found.' } };
+  }
+  // Court diary is a Litigation-only tool — staff in other departments have no access.
+  if (!isCourtDiaryDepartment(staff.department)) {
+    return { error: { status: 403, message: 'Court diary is only available to the Litigation department.' } };
   }
   if (isTeamScopedDiaryDepartment(staff.department) && !teamIdFromStaff(staff)) {
     return { error: { status: 403, message: 'Diary access requires team assignment.' } };
