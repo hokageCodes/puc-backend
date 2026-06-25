@@ -18,6 +18,7 @@ import teamRoutes from './routes/teamRoutes.js';
 import practiceAreaRoutes from './routes/practiceAreaRoutes.js';
 import authRoutes from './routes/authRoutes.js';
 import leaveRoutes from './routes/leaveRoutes.js';
+import leaveTypeRoutes from './routes/leaveTypeRoutes.js';
 import courtDiaryRoutes from './routes/courtDiaryRoutes.js';
 
 
@@ -195,6 +196,7 @@ app.get('/api/public/staff/:id', getPublicStaffById);
 
 app.use('/api/staff', staffRoutes);
 app.use('/api/leave', leaveRoutes);
+app.use('/api/leave-types', leaveTypeRoutes);
 app.use('/api/court-diary', courtDiaryRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
