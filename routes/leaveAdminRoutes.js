@@ -13,7 +13,7 @@ router.use(requireRoles('admin', 'hr'));
 router.get('/staff/:staffId/balances', adminGetStaffBalances);
 router.put(
   '/staff/:staffId/balances/:leaveTypeId',
-  validateBody({ allowlist: ['allocated', 'carriedOver', 'used', 'reason'] }),
+  validateBody({ allowlist: ['allocated', 'carriedOver', 'used', 'reason', 'usedFrom', 'usedTo'] }),
   adminSetStaffBalance
 );
 

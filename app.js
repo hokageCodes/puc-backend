@@ -40,8 +40,11 @@ const apiLimiter = rateLimit({
   max: Number(process.env.API_RATE_LIMIT_MAX) || 10000,
   standardHeaders: true,
   legacyHeaders: false,
-  // Don't rate-limit local development (hot reloads + StrictMode double-fetch).
-  skip: () => !isProduction,
+  // General API rate limiting is disabled (it was causing false "load failed" /
+  // logout-feeling errors during normal use). Brute-force protection still lives on
+  // the auth endpoints (login/reset limiters). Flip API_RATE_LIMIT_DISABLED=false to
+  // re-enable the coarse per-IP ceiling above.
+  skip: () => process.env.API_RATE_LIMIT_DISABLED !== 'false',
   message: {
     error: 'Too many requests, please try again later.'
   }

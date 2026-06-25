@@ -258,6 +258,11 @@ export const adminGetStaffBalances = async (req, res) => {
           used: b.used || 0,
           pending: b.pending || 0,
           remaining: (b.allocated || 0) + (b.carriedOver || 0) - (b.used || 0),
+          // Recent manual adjustments (most recent first) incl. the period used.
+          adjustments: (Array.isArray(b.adjustments) ? b.adjustments : [])
+            .slice(-5)
+            .reverse()
+            .map((a) => ({ amount: a.amount, reason: a.reason, usedFrom: a.usedFrom, usedTo: a.usedTo, addedAt: a.addedAt })),
         };
       })
     );
@@ -303,10 +308,15 @@ export const adminSetStaffBalance = async (req, res) => {
     if (carriedOver !== undefined) balance.carriedOver = carriedOver;
     if (used !== undefined) balance.used = used;
 
+    const usedFrom = req.body.usedFrom ? new Date(req.body.usedFrom) : undefined;
+    const usedTo = req.body.usedTo ? new Date(req.body.usedTo) : undefined;
+
     balance.adjustments = balance.adjustments || [];
     balance.adjustments.push({
       amount: (balance.allocated || 0) - (before.allocated || 0),
       reason: (req.body.reason || 'Manual override (HR/admin)').toString().slice(0, 200),
+      ...(usedFrom && !Number.isNaN(usedFrom.getTime()) ? { usedFrom } : {}),
+      ...(usedTo && !Number.isNaN(usedTo.getTime()) ? { usedTo } : {}),
       addedBy: req.user.id,
     });
     balance.lastReconciledAt = new Date();
