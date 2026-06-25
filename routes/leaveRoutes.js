@@ -96,7 +96,7 @@ router.post(
   '/requests',
   handleCreateRequest,
   validateBody({
-    allowlist: ['leaveTypeId', 'leaveType', 'startDate', 'endDate', 'halfDay', 'coveragePlan', 'handoverNotes', 'reason'],
+    allowlist: ['leaveTypeId', 'leaveType', 'startDate', 'endDate', 'halfDay', 'coveragePlan', 'handoverNotes', 'reason', 'leaveAllowance', 'allowanceMonth'],
     required: ['leaveTypeId', 'startDate', 'endDate', 'reason'],
   }),
   createLeaveRequest

@@ -370,6 +370,9 @@ export const createLeaveRequest = async (req, res) => {
     const coveragePlan = body.coveragePlan;
     const handoverNotes = body.handoverNotes;
     const reason = body.reason;
+    // Leave allowance: arrives as a string over multipart form-data, so coerce to a boolean.
+    const leaveAllowance = body.leaveAllowance === true || ['true', 'yes', 'on', '1'].includes(String(body.leaveAllowance).toLowerCase());
+    const allowanceMonth = leaveAllowance ? normalizeString(body.allowanceMonth) : undefined;
 
     if (!leaveTypeId || !startDate || !endDate || !reason) {
       return res.status(400).json({ message: 'Leave type, dates, and reason are required.' });
@@ -499,6 +502,8 @@ export const createLeaveRequest = async (req, res) => {
           coveragePlan: coveragePlan || undefined,
           handoverNotes: handoverNotes ? handoverNotes.trim() : undefined,
           reason: reason.trim(),
+          leaveAllowance,
+          allowanceMonth: allowanceMonth || undefined,
           attachments,
           approverChain,
           status,
