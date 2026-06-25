@@ -4,6 +4,9 @@ const AdjustmentSchema = new mongoose.Schema(
   {
     amount: { type: Number, required: true },
     reason: { type: String, trim: true },
+    // Optional period the leave was actually used (for back-logged/manual records).
+    usedFrom: { type: Date },
+    usedTo: { type: Date },
     addedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff' },
     addedAt: { type: Date, default: Date.now },
   },
