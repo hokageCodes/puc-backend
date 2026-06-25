@@ -75,7 +75,7 @@ router.use(requireAuth({ scope: ['hub', 'cms'] }));
 router.use(requireRoles('admin', 'hr', 'cms'));
 
 const staffWriteAllowlist = [
-  'firstName', 'lastName', 'email', 'phoneNumber', 'position', 'bio', 'profilePhoto',
+  'firstName', 'lastName', 'email', 'phoneNumber', 'position', 'bio', 'profilePhoto', 'gender',
   'department', 'team', 'practiceAreas', 'division', 'officeLocation', 'teamLeadId', 'lineManagerId',
   'hrId', 'leaveEnabled', 'hireDate', 'confirmationDate', 'isVisible', 'employeeId',
   'roles', 'removeImage',
