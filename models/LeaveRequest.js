@@ -72,6 +72,10 @@ const LeaveRequestSchema = new mongoose.Schema(
     },
     approverChain: [ApproverStepSchema],
     timeline: [TimelineEventSchema],
+    // Set when a staffer requests to withdraw an already-approved request (awaiting
+    // a manager/HR to confirm). Pending requests are cancelled outright, not flagged.
+    withdrawalRequestedAt: { type: Date },
+    withdrawalReason: { type: String, maxlength: 500 },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff', required: true },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff' },
   },

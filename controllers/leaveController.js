@@ -11,6 +11,7 @@ import {
   buildLeaveRequestNotificationEmail,
   buildLeaveApprovedEmail,
   buildLeaveRejectedEmail,
+  buildLeaveNoticeEmail,
 } from '../utils/email.js';
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
@@ -132,6 +133,15 @@ const adjustBalanceOnRejection = async ({ staffId, leaveTypeId, period, duration
   await LeaveBalance.updateOne(
     { staff: staffId, leaveType: leaveTypeId, period },
     { $inc: { pending: -duration } },
+    { session }
+  );
+};
+
+// Cancelling an already-approved request restores the days that were marked "used".
+const adjustBalanceOnCancellation = async ({ staffId, leaveTypeId, period, duration, session }) => {
+  await LeaveBalance.updateOne(
+    { staff: staffId, leaveType: leaveTypeId, period },
+    { $inc: { used: -duration } },
     { session }
   );
 };
@@ -679,9 +689,25 @@ const buildApproverMatchConditions = (user) => {
   return conditions;
 };
 
+// Approved requests with a pending withdrawal that this approver may action.
+const buildWithdrawalMatchConditions = (user) => {
+  const approverId = toObjectIdOrNull(user.id);
+  if (!approverId) return [];
+  const roles = new Set(user.roles || []);
+  const base = { status: 'approved', withdrawalRequestedAt: { $exists: true, $ne: null } };
+  if (roles.has('hr') || roles.has('admin')) return [base];
+  if (roles.has('teamLead') || roles.has('lineManager')) {
+    return [{ ...base, 'approverChain.assignee': approverId }];
+  }
+  return [];
+};
+
 export const getPendingApprovals = async (req, res) => {
   try {
-    const matchConditions = buildApproverMatchConditions(req.user);
+    const matchConditions = [
+      ...buildApproverMatchConditions(req.user),
+      ...buildWithdrawalMatchConditions(req.user),
+    ];
     if (matchConditions.length === 0) return res.json([]);
 
     const { page, limit, skip } = parsePagination(req.query);
@@ -1017,6 +1043,227 @@ export const rejectLeaveRequest = async (req, res) => {
   }
 
   res.json(leaveRequest);
+};
+
+// --- Withdrawal -------------------------------------------------------------
+
+const PENDING_STATUSES = ['submitted', 'pending_teamlead', 'pending_linemanager', 'pending_hr'];
+
+// Staff docs (with email) of the request's approvers. `onlyPending` limits to the
+// current pending step (used when notifying about a withdrawn pending request).
+const collectApprovers = async (leaveRequest, { onlyPending = false } = {}) => {
+  const steps = Array.isArray(leaveRequest.approverChain) ? leaveRequest.approverChain : [];
+  const ids = (onlyPending ? steps.filter((s) => s.status === 'pending') : steps)
+    .map((s) => s.assignee)
+    .filter(Boolean)
+    .map(String);
+  const uniq = [...new Set(ids)];
+  if (uniq.length === 0) return [];
+  const staff = await Staff.find({ _id: { $in: uniq } }).select('firstName lastName email').lean();
+  return staff.filter((s) => s.email);
+};
+
+const canActOnWithdrawal = (leaveRequest, user) => {
+  const roles = Array.isArray(user.roles) ? user.roles : [];
+  if (roles.includes('hr') || roles.includes('admin')) return true;
+  const ids = (leaveRequest.approverChain || []).map((s) => s.assignee && s.assignee.toString());
+  return ids.includes(user.id);
+};
+
+// POST /requests/:id/withdraw — staff withdraws their own request.
+// Pending -> cancelled immediately; Approved -> flagged for manager confirmation.
+export const requestWithdrawal = async (req, res) => {
+  const { id } = req.params;
+  const reason = (req.body?.reason || '').toString().slice(0, 500);
+  const leaveRequestId = String(id || '').trim();
+  if (!mongoose.Types.ObjectId.isValid(leaveRequestId)) {
+    return res.status(400).json({ message: 'Invalid leave request id.' });
+  }
+
+  const session = await mongoose.startSession();
+  let leaveRequest;
+  let cancelledNow = false;
+
+  try {
+    await session.withTransaction(async () => {
+      leaveRequest = await LeaveRequest.findById(leaveRequestId).session(session);
+      if (!leaveRequest) throw new Error('NOT_FOUND');
+      if (leaveRequest.staff.toString() !== req.user.id) throw new Error('FORBIDDEN');
+
+      if (PENDING_STATUSES.includes(leaveRequest.status)) {
+        leaveRequest.status = 'cancelled';
+        leaveRequest.updatedBy = req.user.id;
+        appendTimeline(leaveRequest, 'cancelled', req.user.id, reason || 'Withdrawn by staff');
+        await adjustBalanceOnRejection({
+          staffId: leaveRequest.staff,
+          leaveTypeId: leaveRequest.leaveType,
+          period: currentPeriod(leaveRequest.startDate),
+          duration: leaveRequest.durationDays,
+          session,
+        });
+        cancelledNow = true;
+      } else if (leaveRequest.status === 'approved') {
+        if (leaveRequest.withdrawalRequestedAt) return; // idempotent
+        leaveRequest.withdrawalRequestedAt = new Date();
+        leaveRequest.withdrawalReason = reason || undefined;
+        leaveRequest.updatedBy = req.user.id;
+      } else {
+        throw new Error('NOT_WITHDRAWABLE');
+      }
+      await leaveRequest.save({ session });
+    });
+  } catch (error) {
+    session.endSession();
+    if (error.message === 'NOT_FOUND') return res.status(404).json({ message: 'Leave request not found.' });
+    if (error.message === 'FORBIDDEN') return res.status(403).json({ message: 'You can only withdraw your own request.' });
+    if (error.message === 'NOT_WITHDRAWABLE') return res.status(400).json({ message: 'This request can no longer be withdrawn.' });
+    console.error('requestWithdrawal error:', error);
+    return res.status(409).json({ message: 'Unable to process withdrawal right now. Please retry.' });
+  }
+  session.endSession();
+
+  await leaveRequest.populate(['leaveType', 'staff']);
+  await logAudit(cancelledNow ? 'LEAVE_REQUEST_WITHDRAWN' : 'LEAVE_WITHDRAWAL_REQUESTED', {
+    req,
+    leaveRequestId: leaveRequest._id.toString(),
+    staffId: leaveRequest.staff?._id?.toString?.(),
+    status: leaveRequest.status,
+  });
+
+  try {
+    const staff = leaveRequest.staff;
+    const staffName = `${staff.firstName} ${staff.lastName}`.trim();
+    const recipients = await collectApprovers(leaveRequest, { onlyPending: cancelledNow });
+    for (const r of recipients) {
+      const email = cancelledNow
+        ? buildLeaveNoticeEmail({
+            recipientName: r.firstName,
+            subject: `Leave request withdrawn — ${staffName}`,
+            intro: `${staffName} has <strong>withdrawn</strong> their pending leave request, so it no longer needs your action.`,
+            leaveRequest, leaveType: leaveRequest.leaveType, extra: reason ? `Reason: ${reason}` : '',
+          })
+        : buildLeaveNoticeEmail({
+            recipientName: r.firstName,
+            subject: `Withdrawal requested — ${staffName}`,
+            intro: `${staffName} has requested to <strong>withdraw their approved leave</strong>. Please review and confirm or decline the withdrawal.`,
+            leaveRequest, leaveType: leaveRequest.leaveType, extra: reason ? `Reason: ${reason}` : '',
+          });
+      await sendEmail({ to: r.email, ...email });
+    }
+  } catch (e) {
+    console.error('withdrawal notification email error:', e?.message || e);
+  }
+
+  res.json(leaveRequest);
+};
+
+// POST /requests/:id/withdraw/confirm — manager/HR confirms an approved withdrawal.
+export const confirmWithdrawal = async (req, res) => {
+  const { id } = req.params;
+  const leaveRequestId = String(id || '').trim();
+  if (!mongoose.Types.ObjectId.isValid(leaveRequestId)) {
+    return res.status(400).json({ message: 'Invalid leave request id.' });
+  }
+
+  const session = await mongoose.startSession();
+  let leaveRequest;
+  try {
+    await session.withTransaction(async () => {
+      leaveRequest = await LeaveRequest.findById(leaveRequestId).session(session);
+      if (!leaveRequest) throw new Error('NOT_FOUND');
+      if (leaveRequest.status !== 'approved' || !leaveRequest.withdrawalRequestedAt) throw new Error('NO_WITHDRAWAL');
+      if (!canActOnWithdrawal(leaveRequest, req.user)) throw new Error('NOT_AUTHORISED');
+
+      leaveRequest.status = 'cancelled';
+      leaveRequest.withdrawalRequestedAt = undefined;
+      leaveRequest.updatedBy = req.user.id;
+      appendTimeline(leaveRequest, 'cancelled', req.user.id, req.body?.comment || 'Withdrawal confirmed');
+      await adjustBalanceOnCancellation({
+        staffId: leaveRequest.staff,
+        leaveTypeId: leaveRequest.leaveType,
+        period: currentPeriod(leaveRequest.startDate),
+        duration: leaveRequest.durationDays,
+        session,
+      });
+      await leaveRequest.save({ session });
+    });
+  } catch (error) {
+    session.endSession();
+    if (error.message === 'NOT_FOUND') return res.status(404).json({ message: 'Leave request not found.' });
+    if (error.message === 'NO_WITHDRAWAL') return res.status(400).json({ message: 'No pending withdrawal to confirm.' });
+    if (error.message === 'NOT_AUTHORISED') return res.status(403).json({ message: 'You are not authorised to action this withdrawal.' });
+    console.error('confirmWithdrawal error:', error);
+    return res.status(409).json({ message: 'Unable to confirm withdrawal right now. Please retry.' });
+  }
+  session.endSession();
+
+  await leaveRequest.populate(['leaveType', 'staff']);
+  await logAudit('LEAVE_WITHDRAWAL_CONFIRMED', { req, leaveRequestId: leaveRequest._id.toString(), staffId: leaveRequest.staff?._id?.toString?.() });
+
+  try {
+    const staff = leaveRequest.staff;
+    if (staff?.email) {
+      const email = buildLeaveNoticeEmail({
+        recipientName: staff.firstName,
+        subject: 'Leave withdrawal confirmed',
+        intro: 'Your request to withdraw your approved leave has been <strong>confirmed</strong>. The leave is cancelled and the days have been returned to your balance.',
+        leaveRequest, leaveType: leaveRequest.leaveType,
+      });
+      await sendEmail({ to: staff.email, ...email });
+    }
+  } catch (e) {
+    console.error('withdrawal confirm email error:', e?.message || e);
+  }
+
+  res.json(leaveRequest);
+};
+
+// POST /requests/:id/withdraw/decline — manager/HR declines; leave stays approved.
+export const declineWithdrawal = async (req, res) => {
+  const { id } = req.params;
+  const comment = (req.body?.comment || '').toString().slice(0, 500);
+  const leaveRequestId = String(id || '').trim();
+  if (!mongoose.Types.ObjectId.isValid(leaveRequestId)) {
+    return res.status(400).json({ message: 'Invalid leave request id.' });
+  }
+
+  try {
+    const leaveRequest = await LeaveRequest.findById(leaveRequestId);
+    if (!leaveRequest) return res.status(404).json({ message: 'Leave request not found.' });
+    if (leaveRequest.status !== 'approved' || !leaveRequest.withdrawalRequestedAt) {
+      return res.status(400).json({ message: 'No pending withdrawal to decline.' });
+    }
+    if (!canActOnWithdrawal(leaveRequest, req.user)) {
+      return res.status(403).json({ message: 'You are not authorised to action this withdrawal.' });
+    }
+
+    leaveRequest.withdrawalRequestedAt = undefined;
+    leaveRequest.withdrawalReason = undefined;
+    leaveRequest.updatedBy = req.user.id;
+    await leaveRequest.save();
+    await leaveRequest.populate(['leaveType', 'staff']);
+    await logAudit('LEAVE_WITHDRAWAL_DECLINED', { req, leaveRequestId: leaveRequest._id.toString(), staffId: leaveRequest.staff?._id?.toString?.() });
+
+    try {
+      const staff = leaveRequest.staff;
+      if (staff?.email) {
+        const email = buildLeaveNoticeEmail({
+          recipientName: staff.firstName,
+          subject: 'Leave withdrawal declined',
+          intro: 'Your request to withdraw your approved leave was <strong>declined</strong>. Your leave remains approved.',
+          leaveRequest, leaveType: leaveRequest.leaveType, extra: comment ? `Note: ${comment}` : '',
+        });
+        await sendEmail({ to: staff.email, ...email });
+      }
+    } catch (e) {
+      console.error('withdrawal decline email error:', e?.message || e);
+    }
+
+    res.json(leaveRequest);
+  } catch (error) {
+    console.error('declineWithdrawal error:', error);
+    res.status(500).json({ message: 'Unable to decline withdrawal right now.' });
+  }
 };
 
 export const getCalendarData = async (req, res) => {

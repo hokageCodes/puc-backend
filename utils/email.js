@@ -412,6 +412,28 @@ export const buildLeaveRejectedEmail = (staff, approver, leaveRequest, leaveType
   };
 };
 
+// Flexible leave notice — used for withdrawal request/confirm/decline notifications.
+export const buildLeaveNoticeEmail = ({ recipientName = 'there', subject, intro, leaveRequest, leaveType, extra }) => {
+  const dates = formatLeaveDates(leaveRequest.startDate, leaveRequest.endDate);
+  const dur = `${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}`;
+  return {
+    subject,
+    text: `Hello ${recipientName},\n\n${intro.replace(/<[^>]+>/g, '')}\n\nDetails:\n- Leave Type: ${leaveType?.name || 'Leave'}\n- Dates: ${dates}\n- Duration: ${dur}\n${extra ? `- ${extra}\n` : ''}\nOpen: ${baseUrl('/leave/requests')}\n\n— Paul Usoro & Co Leave Portal`,
+    html: `
+      <p>Hello ${recipientName},</p>
+      <p>${intro}</p>
+      <div style="background:#f1f5f9;padding:16px;border-radius:8px;margin:16px 0;border-left:4px solid #10b981;">
+        <p><strong>Leave Type:</strong> ${leaveType?.name || 'Leave'}</p>
+        <p><strong>Dates:</strong> ${dates}</p>
+        <p><strong>Duration:</strong> ${dur}</p>
+        ${extra ? `<p><strong>${extra}</strong></p>` : ''}
+      </div>
+      <p style="margin:20px 0;"><a href="${baseUrl('/leave/requests')}" style="background:#10b981;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;display:inline-block;font-weight:600;">Open Leave</a></p>
+      <p style="color:#6b7280;font-size:14px;margin-top:20px;">— Paul Usoro &amp; Co Leave Portal</p>
+    `,
+  };
+};
+
 const formatLeaveDates = (startDate, endDate) => {
   const start = new Date(startDate);
   const end = new Date(endDate);
