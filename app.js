@@ -27,19 +27,25 @@ import rateLimit from 'express-rate-limit';
 // Initialize app BEFORE any app.use/app.get
 const app = express();
 
-// Rate limiting middleware (100 requests per 15 minutes per IP)
+// Rate limiting middleware. The previous 100/15min was far too low for this app's
+// request patterns (each page fires several calls), so normal use tripped it.
+const isProduction = process.env.NODE_ENV === 'production';
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
+  // Per IP. Office staff often share one public IP (NAT), so this must comfortably
+  // cover the whole team at once. Env-overridable. Coarse DoS ceiling only —
+  // brute-force protection lives on the auth endpoints (login/reset limiters).
+  max: Number(process.env.API_RATE_LIMIT_MAX) || 10000,
   standardHeaders: true,
   legacyHeaders: false,
+  // Don't rate-limit local development (hot reloads + StrictMode double-fetch).
+  skip: () => !isProduction,
   message: {
     error: 'Too many requests, please try again later.'
   }
 });
-
-// Apply to all API routes
-app.use('/api/', apiLimiter);
+// NOTE: applied AFTER CORS below so a 429 still carries CORS headers (otherwise the
+// browser reports a generic "failed to fetch" instead of the rate-limit message).
 
 // JSON APIs must not be cached by browsers or shared proxies (stale admin/CMS data across devices)
 app.use('/api', (req, res, next) => {
@@ -102,6 +108,10 @@ app.use(cors({
   // Let the browser read pagination metadata on cross-origin responses.
   exposedHeaders: ['X-Total-Pages'],
 }));
+
+// Apply the API rate limiter AFTER CORS so a 429 still carries CORS headers
+// (otherwise the browser reports a generic "failed to fetch"). Skipped in dev.
+app.use('/api/', apiLimiter);
 
 // FIXED: Proper conditional body parsing middleware
 // Skip body parsing entirely for multipart/form-data - multer will handle it
