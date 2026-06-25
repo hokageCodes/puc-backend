@@ -1,3 +1,5 @@
 /node_modules
 .env
 .env*
+# Stray Next build output (this is an Express app; .next should never be here)
+.next/
