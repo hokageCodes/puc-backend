@@ -70,6 +70,10 @@ const LeaveRequestSchema = new mongoose.Schema(
       ],
       default: 'submitted',
     },
+    // Optional leave allowance request captured at submission: whether the staffer
+    // wants the allowance paid out, and which month they'd like it paid in (e.g. "2026-07").
+    leaveAllowance: { type: Boolean, default: false },
+    allowanceMonth: { type: String, maxlength: 20 },
     approverChain: [ApproverStepSchema],
     timeline: [TimelineEventSchema],
     // Set when a staffer requests to withdraw an already-approved request (awaiting
