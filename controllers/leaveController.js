@@ -1127,7 +1127,10 @@ export const getCalendarData = async (req, res) => {
     }
   }
 
-  res.json({ events });
+  // A request can appear in both "my leave" and the team/staff view (e.g. an HR
+  // person sees their own request twice) — dedupe by id so the client gets uniques.
+  const uniqueEvents = [...new Map(events.map((e) => [e.id, e])).values()];
+  res.json({ events: uniqueEvents });
 }
 catch (err) {
   console.error('getCalendarData error:', err);
