@@ -10,6 +10,27 @@ import {
   validatePlan,
   canTransitionReview,
 } from '../utils/performanceWorkflow.js';
+import { canManageReview } from '../utils/performanceAccess.js';
+import { sendEmail, buildPerformanceNoticeEmail } from '../utils/email.js';
+
+const fullName = (s) => (s ? `${s.firstName || ''} ${s.lastName || ''}`.trim() : '');
+
+// Appraisal emails are gated so dry-runs on preview don't mail real staff.
+// Flip PERF_EMAILS_ENABLED=true (prod) to actually send.
+const perfEmailsEnabled = () => process.env.PERF_EMAILS_ENABLED === 'true';
+const notifyPerformance = async ({ to, ...opts }) => {
+  if (!to) return;
+  if (!perfEmailsEnabled()) {
+    console.log(`[perf email suppressed] "${opts.subject}" → ${to}`);
+    return;
+  }
+  try {
+    const msg = buildPerformanceNoticeEmail(opts);
+    await sendEmail({ to, subject: msg.subject, html: msg.html, text: msg.text });
+  } catch (e) {
+    console.error('performance email failed:', e.message);
+  }
+};
 
 /**
  * Performance Evaluation controller.
@@ -249,10 +270,134 @@ export const submitMyPlan = async (req, res) => {
     review.timeline.push({ event: 'plan_submitted', actor: req.user.id });
     review.updatedBy = req.user.id;
     await review.save();
-    // Phase 3 adds the manager notification email here.
+
+    // Notify the manager-of-record (line manager preferred, else team lead).
+    const managerId = review.lineManager || review.teamLead;
+    if (managerId) {
+      const [manager, staff] = await Promise.all([
+        Staff.findById(managerId).select('firstName lastName email'),
+        Staff.findById(req.user.id).select('firstName lastName'),
+      ]);
+      await notifyPerformance({
+        to: manager?.email,
+        recipientName: manager?.firstName || 'there',
+        subject: `Performance plan submitted — ${fullName(staff)}`,
+        intro: `<strong>${fullName(staff) || 'A team member'}</strong> has submitted their performance plan for your review and agreement.`,
+        cycleLabel: cycle.label,
+        cta: '/hub/performance/reviews',
+      });
+    }
     return res.json(review);
   } catch (err) {
     console.error('submitMyPlan error:', err);
     return res.status(500).json({ message: 'Failed to submit your plan.' });
+  }
+};
+
+// ── Manager / HR review queue + plan agreement ──────────────────────────────────
+
+// GET /api/performance/reviews — reviews the caller can manage in the open cycle.
+// HR/admin see all (non-draft); a manager sees only their own reports.
+export const getTeamReviews = async (req, res) => {
+  try {
+    const cycle = await findOpenCycle();
+    if (!cycle) return res.json([]);
+
+    const roles = req.user.roles || [];
+    const filter = { cycle: cycle._id, status: { $ne: 'draft' } };
+    if (!(roles.includes('hr') || roles.includes('admin'))) {
+      filter.$or = [{ lineManager: req.user.id }, { teamLead: req.user.id }];
+    }
+
+    const reviews = await PerformanceReview.find(filter)
+      .populate('staff', 'firstName lastName staffCode')
+      .sort({ updatedAt: -1 })
+      .lean();
+    return res.json({ cycle, reviews });
+  } catch (err) {
+    console.error('getTeamReviews error:', err);
+    return res.status(500).json({ message: 'Failed to load the review queue.' });
+  }
+};
+
+// GET /api/performance/reviews/:id — a single review (manager/HR view).
+export const getReviewById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid review id.' });
+
+    const review = await PerformanceReview.findById(id)
+      .populate('staff', 'firstName lastName staffCode email')
+      .populate('lineManager teamLead', 'firstName lastName');
+    if (!review) return res.status(404).json({ message: 'Review not found.' });
+    if (!canManageReview(review, req.user)) return res.status(403).json({ message: 'You cannot view this review.' });
+
+    return res.json(review);
+  } catch (err) {
+    console.error('getReviewById error:', err);
+    return res.status(500).json({ message: 'Failed to load the review.' });
+  }
+};
+
+// POST /api/performance/reviews/:id/agree-plan — agree or request changes.
+export const agreePlan = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const action = req.body.action === 'request_changes' ? 'request_changes' : 'agree';
+    const comment = typeof req.body.comment === 'string' ? req.body.comment.trim() : '';
+
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid review id.' });
+    const review = await PerformanceReview.findById(id);
+    if (!review) return res.status(404).json({ message: 'Review not found.' });
+    if (!canManageReview(review, req.user)) return res.status(403).json({ message: 'You cannot action this review.' });
+    if (review.status !== 'plan_submitted') return res.status(409).json({ message: 'This plan is not awaiting agreement.' });
+
+    const [manager, staff, cyc] = await Promise.all([
+      Staff.findById(req.user.id).select('firstName lastName'),
+      Staff.findById(review.staff).select('firstName lastName email'),
+      PerformanceCycle.findById(review.cycle).select('label'),
+    ]);
+
+    if (action === 'request_changes') {
+      if (!comment) return res.status(400).json({ message: 'Please add a note explaining the changes needed.' });
+      review.status = 'draft';
+      review.sharedFlags.planShared = false;
+      review.timeline.push({ event: 'plan_changes_requested', actor: req.user.id, note: comment });
+      review.updatedBy = req.user.id;
+      await review.save();
+
+      await notifyPerformance({
+        to: staff?.email,
+        recipientName: staff?.firstName || 'there',
+        subject: `Performance plan — changes requested`,
+        intro: `${fullName(manager) || 'Your manager'} has asked for changes to your performance plan before agreeing it.`,
+        cycleLabel: cyc?.label,
+        extra: `Note: ${comment}`,
+        cta: '/hub/performance',
+      });
+      return res.json(review);
+    }
+
+    // Agree: record the Team Lead/Unit Head sign-off on each development goal.
+    const signOff = { name: fullName(manager), date: new Date() };
+    review.developmentGoals.forEach((g) => { g.leadSignOff = signOff; });
+    review.status = 'plan_agreed';
+    review.timeline.push({ event: 'plan_agreed', actor: req.user.id, note: comment || undefined });
+    review.updatedBy = req.user.id;
+    await review.save();
+
+    await notifyPerformance({
+      to: staff?.email,
+      recipientName: staff?.firstName || 'there',
+      subject: `Performance plan agreed`,
+      intro: `${fullName(manager) || 'Your manager'} has agreed your performance plan. You're all set for this cycle.`,
+      cycleLabel: cyc?.label,
+      extra: comment ? `Note: ${comment}` : undefined,
+      cta: '/hub/performance',
+    });
+    return res.json(review);
+  } catch (err) {
+    console.error('agreePlan error:', err);
+    return res.status(500).json({ message: 'Failed to action the plan.' });
   }
 };

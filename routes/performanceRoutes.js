@@ -9,6 +9,9 @@ import {
   updateMyObjectives,
   updateMyGoals,
   submitMyPlan,
+  getTeamReviews,
+  getReviewById,
+  agreePlan,
 } from '../controllers/performanceController.js';
 import { requireAuth, requireRoles } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validation.js';
@@ -35,5 +38,11 @@ router.get('/me', getMyReview);
 router.put('/me/objectives', validateBody({ allowlist: ['objectives'] }), updateMyObjectives);
 router.put('/me/goals', validateBody({ allowlist: ['developmentGoals'] }), updateMyGoals);
 router.post('/me/submit-plan', validateBody({ allowlist: [] }), submitMyPlan);
+
+// Phase 3 — manager / HR review queue + plan agreement.
+const MANAGER_ROLES = ['teamLead', 'lineManager', 'hr', 'admin'];
+router.get('/reviews', requireRoles(...MANAGER_ROLES), getTeamReviews);
+router.get('/reviews/:id', requireRoles(...MANAGER_ROLES), getReviewById);
+router.post('/reviews/:id/agree-plan', requireRoles(...MANAGER_ROLES), validateBody({ allowlist: ['action', 'comment'] }), agreePlan);
 
 export default router;
