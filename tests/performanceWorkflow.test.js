@@ -5,6 +5,7 @@ import {
   seedBehaviours,
   AGREED_OR_LATER,
   reviewStatusRank,
+  validatePlan,
 } from '../utils/performanceWorkflow.js';
 
 describe('cycle stage progression', () => {
@@ -62,5 +63,51 @@ describe('cycle progress accounting', () => {
   it('ranks statuses in forward order', () => {
     expect(reviewStatusRank('draft')).toBeLessThan(reviewStatusRank('plan_agreed'));
     expect(reviewStatusRank('plan_agreed')).toBeLessThan(reviewStatusRank('closed'));
+  });
+});
+
+describe('plan validation (objectives + development goals)', () => {
+  const validPlan = {
+    objectives: [
+      { performanceArea: 'Billing', weighting: 50, target: 'Bill 90% on time' },
+      { performanceArea: 'Clients', weighting: 50, target: 'Onboard 3 new clients' },
+    ],
+    developmentGoals: [
+      { competency: 'Advocacy' },
+      { competency: 'Drafting' },
+    ],
+  };
+
+  it('accepts a complete plan with weights totalling 100 and ≥2 goals', () => {
+    expect(validatePlan(validPlan)).toEqual({ ok: true, errors: [] });
+  });
+
+  it('rejects weights that do not total 100', () => {
+    const bad = { ...validPlan, objectives: [{ performanceArea: 'X', weighting: 30, target: 't' }] };
+    const { ok, errors } = validatePlan(bad);
+    expect(ok).toBe(false);
+    expect(errors.join(' ')).toMatch(/must total 100/);
+  });
+
+  it('requires each objective to be complete', () => {
+    const bad = { ...validPlan, objectives: [{ performanceArea: '', weighting: 100, target: '' }] };
+    const { ok, errors } = validatePlan(bad);
+    expect(ok).toBe(false);
+    expect(errors.some((e) => /performance area is required/.test(e))).toBe(true);
+    expect(errors.some((e) => /target/.test(e))).toBe(true);
+  });
+
+  it('requires at least 2 development goals', () => {
+    const bad = { ...validPlan, developmentGoals: [{ competency: 'Only one' }] };
+    const { ok, errors } = validatePlan(bad);
+    expect(ok).toBe(false);
+    expect(errors.join(' ')).toMatch(/at least 2 development goals/);
+  });
+
+  it('rejects more than 6 objectives', () => {
+    const many = Array.from({ length: 7 }, () => ({ performanceArea: 'A', weighting: 10, target: 't' }));
+    const { ok, errors } = validatePlan({ ...validPlan, objectives: many });
+    expect(ok).toBe(false);
+    expect(errors.join(' ')).toMatch(/No more than 6/);
   });
 });

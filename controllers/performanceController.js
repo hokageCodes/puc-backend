@@ -1,8 +1,15 @@
 import mongoose from 'mongoose';
 import PerformanceCycle from '../models/PerformanceCycle.js';
 import PerformanceReview from '../models/PerformanceReview.js';
-import { buildPerformanceMeta } from '../utils/performanceEnums.js';
-import { nextCycleStage, AGREED_OR_LATER } from '../utils/performanceWorkflow.js';
+import Staff from '../models/Staff.js';
+import { buildPerformanceMeta, OBJECTIVE_WEIGHTINGS } from '../utils/performanceEnums.js';
+import {
+  nextCycleStage,
+  AGREED_OR_LATER,
+  seedBehaviours,
+  validatePlan,
+  canTransitionReview,
+} from '../utils/performanceWorkflow.js';
 
 /**
  * Performance Evaluation controller.
@@ -117,5 +124,135 @@ export const closeCycle = async (req, res) => {
   } catch (err) {
     console.error('closeCycle error:', err);
     return res.status(500).json({ message: 'Failed to close the cycle.' });
+  }
+};
+
+// ── Employee planning (self-service; any authenticated hub staffer) ─────────────
+
+// The active cycle = the most recent non-closed one. Usually exactly one is open.
+const findOpenCycle = () => PerformanceCycle.findOne({ stage: { $ne: 'closed' } }).sort({ createdAt: -1 });
+
+// Statuses where the employee may still edit their plan (objectives + CDP).
+const PLAN_EDITABLE = ['draft', 'reopened'];
+
+// Get the caller's review for the open cycle, creating a seeded draft on first visit.
+const loadOrCreateMyReview = async (userId) => {
+  const cycle = await findOpenCycle();
+  if (!cycle) return { cycle: null, review: null };
+
+  let review = await PerformanceReview.findOne({ cycle: cycle._id, staff: userId });
+  if (!review) {
+    const staff = await Staff.findById(userId).populate('department', 'name');
+    review = await PerformanceReview.create({
+      cycle: cycle._id,
+      staff: userId,
+      departmentSnapshot: staff?.department?.name || '',
+      lineManager: staff?.lineManagerId || undefined,
+      teamLead: staff?.teamLeadId || undefined,
+      behaviours: seedBehaviours(),
+      status: 'draft',
+      createdBy: userId,
+    });
+  }
+  return { cycle, review };
+};
+
+// Normalise an incoming objective to just the planning fields (entries are added
+// later, at mid/half review — never accepted from the planning client).
+const cleanObjective = (o = {}) => ({
+  performanceArea: typeof o.performanceArea === 'string' ? o.performanceArea.trim() : '',
+  weighting: OBJECTIVE_WEIGHTINGS.includes(Number(o.weighting)) ? Number(o.weighting) : undefined,
+  target: typeof o.target === 'string' ? o.target.trim() : '',
+  entries: [],
+});
+
+const cleanGoal = (g = {}) => ({
+  competency: typeof g.competency === 'string' ? g.competency.trim() : '',
+  howAchieved: typeof g.howAchieved === 'string' ? g.howAchieved.trim() : '',
+  evidence: typeof g.evidence === 'string' ? g.evidence.trim() : '',
+  dueDate: g.dueDate ? new Date(g.dueDate) : undefined,
+  status: typeof g.status === 'string' ? g.status.trim() : '',
+});
+
+// GET /api/performance/me — my review for the open cycle (auto-creates a draft).
+export const getMyReview = async (req, res) => {
+  try {
+    const { cycle, review } = await loadOrCreateMyReview(req.user.id);
+    if (!cycle) return res.json({ cycle: null, review: null });
+    return res.json({ cycle, review });
+  } catch (err) {
+    console.error('getMyReview error:', err);
+    return res.status(500).json({ message: 'Failed to load your performance review.' });
+  }
+};
+
+// PUT /api/performance/me/objectives — save the objectives draft (≤6).
+export const updateMyObjectives = async (req, res) => {
+  try {
+    const { cycle, review } = await loadOrCreateMyReview(req.user.id);
+    if (!cycle) return res.status(409).json({ message: 'There is no active performance cycle.' });
+    if (!PLAN_EDITABLE.includes(review.status)) {
+      return res.status(409).json({ message: 'Your plan has already been submitted and can no longer be edited.' });
+    }
+
+    const incoming = Array.isArray(req.body.objectives) ? req.body.objectives : [];
+    if (incoming.length > 6) return res.status(400).json({ message: 'No more than 6 objectives are allowed.' });
+
+    review.objectives = incoming.map(cleanObjective);
+    review.updatedBy = req.user.id;
+    await review.save();
+    return res.json(review);
+  } catch (err) {
+    console.error('updateMyObjectives error:', err);
+    return res.status(500).json({ message: 'Failed to save your objectives.' });
+  }
+};
+
+// PUT /api/performance/me/goals — save the development-plan draft.
+export const updateMyGoals = async (req, res) => {
+  try {
+    const { cycle, review } = await loadOrCreateMyReview(req.user.id);
+    if (!cycle) return res.status(409).json({ message: 'There is no active performance cycle.' });
+    if (!PLAN_EDITABLE.includes(review.status)) {
+      return res.status(409).json({ message: 'Your plan has already been submitted and can no longer be edited.' });
+    }
+
+    const incoming = Array.isArray(req.body.developmentGoals) ? req.body.developmentGoals : [];
+    review.developmentGoals = incoming.map(cleanGoal);
+    review.updatedBy = req.user.id;
+    await review.save();
+    return res.json(review);
+  } catch (err) {
+    console.error('updateMyGoals error:', err);
+    return res.status(500).json({ message: 'Failed to save your development plan.' });
+  }
+};
+
+// POST /api/performance/me/submit-plan — validate + move draft → plan_submitted.
+export const submitMyPlan = async (req, res) => {
+  try {
+    const { cycle, review } = await loadOrCreateMyReview(req.user.id);
+    if (!cycle) return res.status(409).json({ message: 'There is no active performance cycle.' });
+    if (!PLAN_EDITABLE.includes(review.status)) {
+      return res.status(409).json({ message: 'Your plan has already been submitted.' });
+    }
+
+    const { ok, errors } = validatePlan(review);
+    if (!ok) return res.status(422).json({ message: 'Please complete your plan before submitting.', errors });
+
+    if (!canTransitionReview(review.status, 'plan_submitted')) {
+      return res.status(409).json({ message: 'This plan cannot be submitted in its current state.' });
+    }
+
+    review.status = 'plan_submitted';
+    review.sharedFlags.planShared = true;
+    review.timeline.push({ event: 'plan_submitted', actor: req.user.id });
+    review.updatedBy = req.user.id;
+    await review.save();
+    // Phase 3 adds the manager notification email here.
+    return res.json(review);
+  } catch (err) {
+    console.error('submitMyPlan error:', err);
+    return res.status(500).json({ message: 'Failed to submit your plan.' });
   }
 };

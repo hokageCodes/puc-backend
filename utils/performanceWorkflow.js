@@ -5,7 +5,7 @@
  * calls these to guard transitions; illegal moves are rejected server-side.
  * See PERFORMANCE-REVIEW-BUILD.md §B/§D.
  */
-import { CYCLE_STAGES, BEHAVIOURS } from './performanceEnums.js';
+import { CYCLE_STAGES, BEHAVIOURS, LIMITS, OBJECTIVE_WEIGHTINGS } from './performanceEnums.js';
 
 // Cycle stages advance strictly in this order; 'closed' is terminal.
 export const CYCLE_STAGE_ORDER = [...CYCLE_STAGES]; // planning → mid_term → half_year → moderation → closed
@@ -54,3 +54,43 @@ export const AGREED_OR_LATER = FORWARD_ORDER.slice(FORWARD_ORDER.indexOf('plan_a
  */
 export const seedBehaviours = () =>
   BEHAVIOURS.map((b) => ({ key: b.key, statement: b.statement, entries: [] }));
+
+const str = (v) => (typeof v === 'string' ? v.trim() : '');
+
+/**
+ * Validate a planning submission (objectives + development goals) before a staffer
+ * can move draft → plan_submitted. Returns { ok, errors[] }. Pure — no DB.
+ * Rules from Findings §3.2/§3.4: ≤6 objectives, each complete, weights total 100%,
+ * ≥2 development goals each with a competency.
+ */
+export const validatePlan = ({ objectives = [], developmentGoals = [] } = {}) => {
+  const errors = [];
+
+  if (!Array.isArray(objectives) || objectives.length === 0) {
+    errors.push('Add at least one performance objective.');
+  } else if (objectives.length > LIMITS.MAX_OBJECTIVES) {
+    errors.push(`No more than ${LIMITS.MAX_OBJECTIVES} objectives are allowed.`);
+  }
+
+  (objectives || []).forEach((o, i) => {
+    if (!str(o.performanceArea)) errors.push(`Objective ${i + 1}: performance area is required.`);
+    if (!OBJECTIVE_WEIGHTINGS.includes(Number(o.weighting))) errors.push(`Objective ${i + 1}: a valid weighting is required.`);
+    if (!str(o.target)) errors.push(`Objective ${i + 1}: target / expected result is required.`);
+  });
+
+  if (Array.isArray(objectives) && objectives.length) {
+    const total = objectives.reduce((sum, o) => sum + (Number(o.weighting) || 0), 0);
+    if (total !== LIMITS.TOTAL_WEIGHTING) {
+      errors.push(`Objective weightings must total ${LIMITS.TOTAL_WEIGHTING}% (currently ${total}%).`);
+    }
+  }
+
+  if (!Array.isArray(developmentGoals) || developmentGoals.length < LIMITS.MIN_DEVELOPMENT_GOALS) {
+    errors.push(`Add at least ${LIMITS.MIN_DEVELOPMENT_GOALS} development goals.`);
+  }
+  (developmentGoals || []).forEach((g, i) => {
+    if (!str(g.competency)) errors.push(`Development goal ${i + 1}: competency is required.`);
+  });
+
+  return { ok: errors.length === 0, errors };
+};
