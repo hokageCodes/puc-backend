@@ -2,18 +2,46 @@ import mongoose from 'mongoose';
 import PerformanceCycle from '../models/PerformanceCycle.js';
 import PerformanceReview from '../models/PerformanceReview.js';
 import Staff from '../models/Staff.js';
-import { buildPerformanceMeta, OBJECTIVE_WEIGHTINGS } from '../utils/performanceEnums.js';
+import {
+  buildPerformanceMeta,
+  OBJECTIVE_WEIGHTINGS,
+  OBJECTIVE_STATUS_MID,
+  OBJECTIVE_STATUS_HALF,
+  BEHAVIOUR_RATINGS,
+  CHAR_LIMITS,
+  FINAL_RATINGS,
+} from '../utils/performanceEnums.js';
 import {
   nextCycleStage,
   AGREED_OR_LATER,
   seedBehaviours,
   validatePlan,
   canTransitionReview,
+  reviewStatusRank,
 } from '../utils/performanceWorkflow.js';
 import { canManageReview } from '../utils/performanceAccess.js';
+import { filterReviewForViewer, viewerRoleFor } from '../utils/performanceVisibility.js';
+import { computeSuggestedScore } from '../utils/performanceScore.js';
 import { sendEmail, buildPerformanceNoticeEmail } from '../utils/email.js';
 
 const fullName = (s) => (s ? `${s.firstName || ''} ${s.lastName || ''}`.trim() : '');
+
+const asObject = (review) => (review?.toObject ? review.toObject() : review);
+
+// Shape a review for the employee's own /me view: D6 filtering + a suggested score
+// from their own half-year self-assessment.
+const myView = (review) => {
+  const filtered = filterReviewForViewer(asObject(review), 'employee');
+  return { ...filtered, suggestion: computeSuggestedScore(filtered, 'employee') };
+};
+
+// Shape a review for a manager/HR viewer: filter per role + suggestion from the
+// relevant author's half-year assessment.
+const viewerView = (review, user) => {
+  const role = viewerRoleFor(review, user);
+  const filtered = filterReviewForViewer(asObject(review), role);
+  return { ...filtered, suggestion: computeSuggestedScore(filtered, role === 'employee' ? 'employee' : 'manager') };
+};
 
 // Appraisal emails are gated so dry-runs on preview don't mail real staff.
 // Flip PERF_EMAILS_ENABLED=true (prod) to actually send.
@@ -141,6 +169,8 @@ export const closeCycle = async (req, res) => {
     cycle.stage = 'closed';
     cycle.updatedBy = req.user.id;
     await cycle.save();
+    // Freeze the cycle's reviews into a terminal state for the record.
+    await PerformanceReview.updateMany({ cycle: cycle._id, status: { $ne: 'closed' } }, { $set: { status: 'closed' } });
     return res.json(cycle);
   } catch (err) {
     console.error('closeCycle error:', err);
@@ -200,7 +230,9 @@ export const getMyReview = async (req, res) => {
   try {
     const { cycle, review } = await loadOrCreateMyReview(req.user.id);
     if (!cycle) return res.json({ cycle: null, review: null });
-    return res.json({ cycle, review });
+    // The caller is the employee on their own review — they see the manager's
+    // entries only once a stage is returned (D6).
+    return res.json({ cycle, review: myView(review) });
   } catch (err) {
     console.error('getMyReview error:', err);
     return res.status(500).json({ message: 'Failed to load your performance review.' });
@@ -328,11 +360,13 @@ export const getReviewById = async (req, res) => {
 
     const review = await PerformanceReview.findById(id)
       .populate('staff', 'firstName lastName staffCode email')
-      .populate('lineManager teamLead', 'firstName lastName');
+      .populate('lineManager teamLead', 'firstName lastName')
+      .populate('cycle', 'label stage');
     if (!review) return res.status(404).json({ message: 'Review not found.' });
     if (!canManageReview(review, req.user)) return res.status(403).json({ message: 'You cannot view this review.' });
 
-    return res.json(review);
+    // Manager sees the employee's entries only once shared (D6); HR/admin see all.
+    return res.json(viewerView(review, req.user));
   } catch (err) {
     console.error('getReviewById error:', err);
     return res.status(500).json({ message: 'Failed to load the review.' });
@@ -399,5 +433,360 @@ export const agreePlan = async (req, res) => {
   } catch (err) {
     console.error('agreePlan error:', err);
     return res.status(500).json({ message: 'Failed to action the plan.' });
+  }
+};
+
+// ── Stage assessments (mid-term & half-year) — generic over stage ───────────────
+
+const STAGE_PARAMS = ['mid', 'half'];
+const CYCLE_STAGE_FOR = { mid: 'mid_term', half: 'half_year' };
+const OBJ_STATUS_BY_STAGE = { mid: OBJECTIVE_STATUS_MID, half: OBJECTIVE_STATUS_HALF };
+const SHARE_TARGET = { mid: 'mid_employee', half: 'half_employee' };
+const RETURN_TARGET = { mid: 'mid_manager_returned', half: 'half_manager_returned' };
+const stageLabel = (s) => (s === 'mid' ? 'mid-term' : 'half-year');
+
+// Replace any existing {stage,author} entry, then add the new one.
+const upsertEntry = (entries, { stage, author, ...rest }) => {
+  const kept = (entries || []).filter((e) => !(e.stage === stage && e.author === author));
+  kept.push({ stage, author, ...rest, updatedAt: new Date() });
+  return kept;
+};
+
+// Merge an incoming assessment (index-aligned to objectives/behaviours) into the review.
+const mergeAssessment = (review, { stage, author, body }) => {
+  const objStatuses = OBJ_STATUS_BY_STAGE[stage];
+  const objInputs = Array.isArray(body.objectives) ? body.objectives : [];
+  review.objectives.forEach((o, i) => {
+    const inp = objInputs[i];
+    if (!inp) return;
+    const status = objStatuses.includes(inp.status) ? inp.status : undefined;
+    const comments = typeof inp.comments === 'string' ? inp.comments.slice(0, CHAR_LIMITS.OBJECTIVE_COMMENT) : undefined;
+    if (status === undefined && !comments) return;
+    o.entries = upsertEntry(o.entries, { stage, author, status, comments });
+  });
+
+  const behInputs = Array.isArray(body.behaviours) ? body.behaviours : [];
+  review.behaviours.forEach((b, i) => {
+    const inp = behInputs[i];
+    if (!inp) return;
+    const rating = BEHAVIOUR_RATINGS.includes(inp.rating) ? inp.rating : undefined;
+    const comments = typeof inp.comments === 'string' ? inp.comments.slice(0, CHAR_LIMITS.BEHAVIOUR_COMMENT) : undefined;
+    if (rating === undefined && !comments) return;
+    b.entries = upsertEntry(b.entries, { stage, author, rating, comments });
+  });
+};
+
+// PUT /api/performance/me/assessment/:stage — employee self-assessment (mid|half).
+export const saveMyAssessment = async (req, res) => {
+  try {
+    const stage = req.params.stage;
+    if (!STAGE_PARAMS.includes(stage)) return res.status(400).json({ message: 'Invalid stage.' });
+
+    const { cycle, review } = await loadOrCreateMyReview(req.user.id);
+    if (!cycle) return res.status(409).json({ message: 'There is no active performance cycle.' });
+    if (cycle.stage !== CYCLE_STAGE_FOR[stage]) return res.status(409).json({ message: `The ${stageLabel(stage)} review isn't open yet.` });
+    if (reviewStatusRank(review.status) < reviewStatusRank('plan_agreed')) {
+      return res.status(409).json({ message: 'Your plan must be agreed before you can complete a review.' });
+    }
+
+    mergeAssessment(review, { stage, author: 'employee', body: req.body });
+    review.updatedBy = req.user.id;
+    await review.save();
+    return res.json(myView(review));
+  } catch (err) {
+    console.error('saveMyAssessment error:', err);
+    return res.status(500).json({ message: 'Failed to save your review.' });
+  }
+};
+
+// POST /api/performance/me/share/:stage — hand the stage to the manager.
+export const shareMyStage = async (req, res) => {
+  try {
+    const stage = req.params.stage;
+    if (!STAGE_PARAMS.includes(stage)) return res.status(400).json({ message: 'Invalid stage.' });
+
+    const { cycle, review } = await loadOrCreateMyReview(req.user.id);
+    if (!cycle) return res.status(409).json({ message: 'There is no active performance cycle.' });
+    if (cycle.stage !== CYCLE_STAGE_FOR[stage]) return res.status(409).json({ message: `The ${stageLabel(stage)} review isn't open yet.` });
+
+    const flag = `${stage}Shared`;
+    if (!review.sharedFlags[flag]) {
+      review.sharedFlags[flag] = true;
+      if (canTransitionReview(review.status, SHARE_TARGET[stage])) review.status = SHARE_TARGET[stage];
+      review.timeline.push({ event: `${stage}_shared`, actor: req.user.id });
+      review.updatedBy = req.user.id;
+      await review.save();
+
+      const managerId = review.lineManager || review.teamLead;
+      if (managerId) {
+        const [manager, staff] = await Promise.all([
+          Staff.findById(managerId).select('firstName lastName email'),
+          Staff.findById(req.user.id).select('firstName lastName'),
+        ]);
+        await notifyPerformance({
+          to: manager?.email,
+          recipientName: manager?.firstName || 'there',
+          subject: `${stageLabel(stage)} review shared — ${fullName(staff)}`,
+          intro: `<strong>${fullName(staff) || 'A team member'}</strong> has shared their ${stageLabel(stage)} self-assessment for your review.`,
+          cycleLabel: cycle.label,
+          cta: '/hub/performance/reviews',
+        });
+      }
+    }
+    return res.json(myView(review));
+  } catch (err) {
+    console.error('shareMyStage error:', err);
+    return res.status(500).json({ message: 'Failed to share your review.' });
+  }
+};
+
+// PUT /api/performance/reviews/:id/assessment/:stage — manager assessment (mid|half).
+export const saveManagerAssessment = async (req, res) => {
+  try {
+    const { id, stage } = req.params;
+    if (!STAGE_PARAMS.includes(stage)) return res.status(400).json({ message: 'Invalid stage.' });
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid review id.' });
+
+    const review = await PerformanceReview.findById(id);
+    if (!review) return res.status(404).json({ message: 'Review not found.' });
+    if (!canManageReview(review, req.user)) return res.status(403).json({ message: 'You cannot action this review.' });
+
+    const cycle = await PerformanceCycle.findById(review.cycle).select('stage');
+    if (!cycle || cycle.stage !== CYCLE_STAGE_FOR[stage]) {
+      return res.status(409).json({ message: `The ${stageLabel(stage)} review isn't open.` });
+    }
+
+    mergeAssessment(review, { stage, author: 'manager', body: req.body });
+    review.updatedBy = req.user.id;
+    await review.save();
+    return res.json(viewerView(review, req.user));
+  } catch (err) {
+    console.error('saveManagerAssessment error:', err);
+    return res.status(500).json({ message: 'Failed to save your assessment.' });
+  }
+};
+
+// POST /api/performance/reviews/:id/return/:stage — return the stage to the employee.
+export const returnStage = async (req, res) => {
+  try {
+    const { id, stage } = req.params;
+    if (!STAGE_PARAMS.includes(stage)) return res.status(400).json({ message: 'Invalid stage.' });
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid review id.' });
+
+    const review = await PerformanceReview.findById(id);
+    if (!review) return res.status(404).json({ message: 'Review not found.' });
+    if (!canManageReview(review, req.user)) return res.status(403).json({ message: 'You cannot action this review.' });
+
+    const flag = `${stage}Returned`;
+    if (!review.sharedFlags[flag]) {
+      review.sharedFlags[flag] = true;
+      if (canTransitionReview(review.status, RETURN_TARGET[stage])) review.status = RETURN_TARGET[stage];
+      review.timeline.push({ event: `${stage}_returned`, actor: req.user.id });
+      review.updatedBy = req.user.id;
+      await review.save();
+
+      const [manager, staff, cyc] = await Promise.all([
+        Staff.findById(req.user.id).select('firstName lastName'),
+        Staff.findById(review.staff).select('firstName lastName email'),
+        PerformanceCycle.findById(review.cycle).select('label'),
+      ]);
+      await notifyPerformance({
+        to: staff?.email,
+        recipientName: staff?.firstName || 'there',
+        subject: `${stageLabel(stage)} review returned`,
+        intro: `${fullName(manager) || 'Your manager'} has completed and returned your ${stageLabel(stage)} review. You can now see their assessment.`,
+        cycleLabel: cyc?.label,
+        cta: '/hub/performance',
+      });
+    }
+    return res.json(viewerView(review, req.user));
+  } catch (err) {
+    console.error('returnStage error:', err);
+    return res.status(500).json({ message: 'Failed to return the review.' });
+  }
+};
+
+// ── Final rating (half-year; manual pick with the suggested score as guidance) ──
+
+const readFinal = (body) => ({
+  rating: FINAL_RATINGS.includes(body.rating) ? body.rating : null,
+  rationale: typeof body.rationale === 'string' ? body.rationale.slice(0, CHAR_LIMITS.FINAL_RATIONALE) : '',
+});
+
+// POST /api/performance/me/final-rating — employee proposes their final rating.
+export const setMyFinalRating = async (req, res) => {
+  try {
+    const { cycle, review } = await loadOrCreateMyReview(req.user.id);
+    if (!cycle) return res.status(409).json({ message: 'There is no active performance cycle.' });
+    if (cycle.stage !== 'half_year') return res.status(409).json({ message: 'The final rating can only be set during the half-year review.' });
+
+    const { rating, rationale } = readFinal(req.body);
+    if (!rating) return res.status(400).json({ message: 'Please choose a valid final rating.' });
+
+    review.employeeFinalRating = rating;
+    review.employeeFinalRationale = rationale;
+    review.timeline.push({ event: 'employee_final_rating', actor: req.user.id, note: rating });
+    review.updatedBy = req.user.id;
+    await review.save();
+    return res.json(myView(review));
+  } catch (err) {
+    console.error('setMyFinalRating error:', err);
+    return res.status(500).json({ message: 'Failed to save your final rating.' });
+  }
+};
+
+// POST /api/performance/reviews/:id/manager-final — manager records their final rating.
+export const setManagerFinalRating = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid review id.' });
+
+    const review = await PerformanceReview.findById(id);
+    if (!review) return res.status(404).json({ message: 'Review not found.' });
+    if (!canManageReview(review, req.user)) return res.status(403).json({ message: 'You cannot action this review.' });
+
+    const cycle = await PerformanceCycle.findById(review.cycle).select('stage');
+    if (!cycle || cycle.stage !== 'half_year') return res.status(409).json({ message: 'The final rating can only be set during the half-year review.' });
+
+    const { rating, rationale } = readFinal(req.body);
+    if (!rating) return res.status(400).json({ message: 'Please choose a valid final rating.' });
+
+    review.managerFinalRating = rating;
+    review.managerFinalRationale = rationale;
+    review.timeline.push({ event: 'manager_final_rating', actor: req.user.id, note: rating });
+    review.updatedBy = req.user.id;
+    await review.save();
+    return res.json(viewerView(review, req.user));
+  } catch (err) {
+    console.error('setManagerFinalRating error:', err);
+    return res.status(500).json({ message: 'Failed to save the final rating.' });
+  }
+};
+
+// ── HR moderation (HR/admin) ────────────────────────────────────────────────────
+
+// POST /api/performance/reviews/:id/moderate — set the moderated rating of record.
+// HR can override the employee/manager ratings; the change is logged on the timeline.
+export const moderateReview = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid review id.' });
+
+    const review = await PerformanceReview.findById(id);
+    if (!review) return res.status(404).json({ message: 'Review not found.' });
+
+    const rating = FINAL_RATINGS.includes(req.body.rating) ? req.body.rating : null;
+    if (!rating) return res.status(400).json({ message: 'Please choose a valid moderated rating.' });
+    const note = typeof req.body.note === 'string' ? req.body.note.slice(0, 1000) : '';
+
+    const prev = review.moderatedFinalRating;
+    review.moderatedFinalRating = rating;
+    review.moderationNote = note;
+    if (canTransitionReview(review.status, 'moderation')) review.status = 'moderation';
+    review.timeline.push({
+      event: 'moderated',
+      actor: req.user.id,
+      note: `${prev ? `${prev} → ` : ''}${rating}${note ? ` · ${note}` : ''}`,
+    });
+    review.updatedBy = req.user.id;
+    await review.save();
+
+    // Let both voices know the rating of record is set.
+    const [staff, cyc] = await Promise.all([
+      Staff.findById(review.staff).select('firstName lastName email'),
+      PerformanceCycle.findById(review.cycle).select('label'),
+    ]);
+    await notifyPerformance({
+      to: staff?.email,
+      recipientName: staff?.firstName || 'there',
+      subject: 'Performance review moderated',
+      intro: `Your performance review for ${cyc?.label || 'this cycle'} has been moderated. The final rating of record is <strong>${rating}</strong>.`,
+      cycleLabel: cyc?.label,
+      extra: note ? `Note: ${note}` : undefined,
+      cta: '/hub/performance',
+    });
+    return res.json(viewerView(review, req.user));
+  } catch (err) {
+    console.error('moderateReview error:', err);
+    return res.status(500).json({ message: 'Failed to moderate the review.' });
+  }
+};
+
+// POST /api/performance/reviews/:id/reopen — send a review back for further edits.
+export const reopenReview = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid review id.' });
+
+    const review = await PerformanceReview.findById(id);
+    if (!review) return res.status(404).json({ message: 'Review not found.' });
+
+    const note = typeof req.body.note === 'string' ? req.body.note.slice(0, 1000) : '';
+    review.status = 'reopened';
+    review.timeline.push({ event: 'reopened', actor: req.user.id, note: note || undefined });
+    review.updatedBy = req.user.id;
+    await review.save();
+    return res.json(viewerView(review, req.user));
+  } catch (err) {
+    console.error('reopenReview error:', err);
+    return res.status(500).json({ message: 'Failed to reopen the review.' });
+  }
+};
+
+// ── Reporting (Phase 7) ─────────────────────────────────────────────────────────
+
+const csvCell = (v) => {
+  const s = v == null ? '' : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
+// GET /api/performance/cycles/:id/export — CSV of all reviews in a cycle (HR/admin).
+export const exportCycle = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid cycle id.' });
+    const cycle = await PerformanceCycle.findById(id);
+    if (!cycle) return res.status(404).json({ message: 'Cycle not found.' });
+
+    const reviews = await PerformanceReview.find({ cycle: id }).populate('staff', 'firstName lastName staffCode').lean();
+    const header = ['Staff', 'Staff code', 'Department', 'Status', 'Employee rating', 'Manager rating', 'Moderated rating', 'Suggested band'];
+    const rows = [header];
+    for (const r of reviews) {
+      const s = computeSuggestedScore(r, 'manager');
+      rows.push([
+        fullName(r.staff), r.staff?.staffCode || '', r.departmentSnapshot || '', r.status,
+        r.employeeFinalRating || '', r.managerFinalRating || '', r.moderatedFinalRating || '', s ? String(s.band) : '',
+      ]);
+    }
+    const csv = rows.map((row) => row.map(csvCell).join(',')).join('\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="performance-${cycle.label.replace(/\s+/g, '_')}.csv"`);
+    return res.send(csv);
+  } catch (err) {
+    console.error('exportCycle error:', err);
+    return res.status(500).json({ message: 'Failed to export the cycle.' });
+  }
+};
+
+// GET /api/performance/me/history — the caller's reviews across all cycles (read-only).
+export const getMyHistory = async (req, res) => {
+  try {
+    const reviews = await PerformanceReview.find({ staff: req.user.id })
+      .populate('cycle', 'label stage')
+      .sort({ createdAt: -1 })
+      .lean();
+    const items = reviews.map((r) => ({
+      _id: r._id,
+      cycle: r.cycle,
+      status: r.status,
+      employeeFinalRating: r.employeeFinalRating || null,
+      managerFinalRating: r.managerFinalRating || null,
+      moderatedFinalRating: r.moderatedFinalRating || null,
+      updatedAt: r.updatedAt,
+    }));
+    return res.json(items);
+  } catch (err) {
+    console.error('getMyHistory error:', err);
+    return res.status(500).json({ message: 'Failed to load your performance history.' });
   }
 };
