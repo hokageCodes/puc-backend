@@ -434,6 +434,29 @@ export const buildLeaveNoticeEmail = ({ recipientName = 'there', subject, intro,
   };
 };
 
+/**
+ * Generic Performance-module notice email (submit/agree/return/moderate, etc.).
+ * Mirrors buildLeaveNoticeEmail: emerald-themed HTML shell + plain-text fallback.
+ * `cta` defaults to the appraisal area; pass a relative path to deep-link.
+ */
+export const buildPerformanceNoticeEmail = ({ recipientName = 'there', subject, intro, cycleLabel, extra, cta = '/hub/performance' }) => {
+  const link = baseUrl(cta);
+  return {
+    subject,
+    text: `Hello ${recipientName},\n\n${intro.replace(/<[^>]+>/g, '')}\n\n${cycleLabel ? `Cycle: ${cycleLabel}\n` : ''}${extra ? `${extra}\n` : ''}\nOpen: ${link}\n\n— Paul Usoro & Co Performance`,
+    html: `
+      <p>Hello ${recipientName},</p>
+      <p>${intro}</p>
+      <div style="background:#f1f5f9;padding:16px;border-radius:8px;margin:16px 0;border-left:4px solid #10b981;">
+        ${cycleLabel ? `<p><strong>Cycle:</strong> ${cycleLabel}</p>` : ''}
+        ${extra ? `<p>${extra}</p>` : ''}
+      </div>
+      <p style="margin:20px 0;"><a href="${link}" style="background:#10b981;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;display:inline-block;font-weight:600;">Open Performance</a></p>
+      <p style="color:#6b7280;font-size:14px;margin-top:20px;">— Paul Usoro &amp; Co Performance</p>
+    `,
+  };
+};
+
 const formatLeaveDates = (startDate, endDate) => {
   const start = new Date(startDate);
   const end = new Date(endDate);
