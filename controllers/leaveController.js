@@ -7,6 +7,7 @@ import { sendEmail } from '../utils/email.js';
 import { logAudit } from '../utils/auditLogger.js';
 import { calculateDurationDays } from '../utils/leaveDays.js';
 import { leaveTypeRequiredGender, canUseLeaveType } from '../utils/leaveTypeGender.js';
+import { hasAnyRole, ROLES } from '../config/rbac.js';
 import {
   buildLeaveRequestNotificationEmail,
   buildLeaveApprovedEmail,
@@ -743,26 +744,35 @@ export const getPendingApprovals = async (req, res) => {
 export const getMyApprovals = async (req, res) => {
   try {
     const userId = req.user.id;
+    // HR and admin oversee the whole firm, so they see every approval/rejection —
+    // not just the ones they personally actioned. Other approvers see their own.
+    const firmWide = hasAnyRole(req.user.roles, [ROLES.HR, ROLES.ADMIN]);
     const { page, limit, skip } = parsePagination(req.query);
 
+    const actorMatch = firmWide
+      ? { event: { $in: ['approved', 'rejected'] } }
+      : { actor: userId, event: { $in: ['approved', 'rejected'] } };
+
     const requests = await LeaveRequest.find({
-      timeline: {
-        $elemMatch: {
-          actor: userId,
-          event: { $in: ['approved', 'rejected'] },
-        },
-      },
+      timeline: { $elemMatch: actorMatch },
     })
       .populate('leaveType', 'name code')
       .populate('staff', 'firstName lastName staffCode')
+      .populate('timeline.actor', 'firstName lastName')
       .sort({ updatedAt: -1 })
       .lean();
+
+    const actorId = (a) => String(a && a._id ? a._id : a);
+    const actorName = (a) =>
+      a && typeof a === 'object' ? `${a.firstName || ''} ${a.lastName || ''}`.trim() || null : null;
 
     const actions = [];
     for (const reqDoc of requests) {
       const staffName = `${reqDoc.staff?.firstName || ''} ${reqDoc.staff?.lastName || ''}`.trim();
       const relevant = (reqDoc.timeline || []).filter(
-        (t) => String(t.actor) === String(userId) && ['approved', 'rejected'].includes(t.event)
+        (t) =>
+          ['approved', 'rejected'].includes(t.event) &&
+          (firmWide || actorId(t.actor) === String(userId))
       );
 
       for (const t of relevant) {
@@ -773,6 +783,7 @@ export const getMyApprovals = async (req, res) => {
           note: t.note || null,
           leaveType: reqDoc.leaveType?.name || null,
           staffName,
+          actorName: actorName(t.actor),
           status: reqDoc.status,
           startDate: reqDoc.startDate,
           endDate: reqDoc.endDate,

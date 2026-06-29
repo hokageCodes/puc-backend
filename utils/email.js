@@ -233,6 +233,152 @@ const baseUrl = (path = '') => {
   return `${leaveBase.replace(/\/$/, '')}${path}`;
 };
 
+/* ------------------------------------------------------------------ *
+ * Luxury, plain leave-email shell.
+ * A single quiet card: header (who + status), deep-green banner with
+ * the leave at a glance, then a clean label/value body. No gradients,
+ * no imagery — just generous whitespace and one accent colour.
+ * ------------------------------------------------------------------ */
+
+const BRAND = 'Paul Usoro & Co';
+const BRAND_GREEN = '#2d4a3e';
+
+const escapeHtml = (s) =>
+  String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+const initialsOf = (name = '') => {
+  const parts = String(name).trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '•';
+  return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+};
+
+const durationLabel = (days) => `${days} ${days === 1 ? 'working day' : 'working days'}`;
+
+// A quiet "itinerary.pdf"-style pill: a dot + filename. Static (not a link) —
+// attachments live behind auth on the API, so the recipient opens them in-app
+// via the CTA rather than a dead direct link.
+const fileChip = (name) =>
+  `<span style="display:inline-block;margin:0 8px 8px 0;padding:7px 15px 7px 12px;background:#f3f6f4;border:1px solid #e2e8e3;border-radius:999px;font-size:14px;color:#26302b;line-height:1;"><span style="display:inline-block;width:7px;height:7px;border-radius:4px;background:${BRAND_GREEN};margin-right:9px;"></span>${escapeHtml(name)}</span>`;
+
+const attachmentChips = (attachments = []) =>
+  (Array.isArray(attachments) ? attachments : []).filter((a) => a && a.filename).map((a) => fileChip(a.filename)).join('');
+
+const STATUS_STYLES = {
+  pending:  { label: 'Pending',   color: '#5b6b62', border: '#cdd6d0', bg: '#f3f6f4' },
+  review:   { label: 'In review', color: '#8a6d1f', border: '#e7d8a8', bg: '#fbf6e7' },
+  approved: { label: 'Approved',  color: '#2d4a3e', border: '#bcd1c6', bg: '#eaf2ec' },
+  declined: { label: 'Declined',  color: '#a23b2e', border: '#e6c3bd', bg: '#f9ece9' },
+};
+
+/**
+ * Renders the full HTML document for a leave email.
+ * @param {object} cfg
+ * @param {string} cfg.subjectName   Name shown beside the avatar.
+ * @param {string} cfg.subjectMeta   Muted sub-line under the name.
+ * @param {'pending'|'review'|'approved'|'declined'} cfg.status
+ * @param {string} [cfg.statusLabel] Overrides the default pill label.
+ * @param {string} cfg.eyebrow       Uppercase label above the banner title (e.g. leave type).
+ * @param {string} cfg.title         Banner headline (e.g. the dates).
+ * @param {string} [cfg.titleMeta]   Light text after the headline (e.g. duration).
+ * @param {string} [cfg.subtitle]    One quiet line under the headline.
+ * @param {string} [cfg.greeting]    "Hello Name,"
+ * @param {string[]} [cfg.body]      Paragraphs (raw HTML allowed).
+ * @param {Array<{label:string,value:string,html?:boolean}>} [cfg.rows]
+ * @param {{label:string,url:string}} [cfg.cta]
+ * @param {string} [cfg.closing]     Closing paragraph (raw HTML allowed).
+ */
+const renderLeaveEmail = (cfg) => {
+  const {
+    subjectName = BRAND,
+    subjectMeta = 'Leave Portal',
+    status = 'pending',
+    statusLabel,
+    eyebrow = 'Leave',
+    title = '',
+    titleMeta = '',
+    subtitle = '',
+    greeting = '',
+    body = [],
+    rows = [],
+    cta,
+    closing = '',
+  } = cfg;
+
+  const st = STATUS_STYLES[status] || STATUS_STYLES.pending;
+  const pill = escapeHtml(statusLabel || st.label);
+
+  const rowsHtml = rows
+    .filter((r) => r && r.value)
+    .map(
+      (r) => `
+              <tr>
+                <td style="padding:15px 0;border-top:1px solid #eef0ed;vertical-align:top;width:36%;color:#8a958d;font-size:13px;font-weight:500;">${escapeHtml(r.label)}</td>
+                <td style="padding:15px 0 15px 20px;border-top:1px solid #eef0ed;vertical-align:top;color:#26302b;font-size:15px;line-height:1.55;">${r.html ? r.value : escapeHtml(r.value)}</td>
+              </tr>`,
+    )
+    .join('');
+
+  const bodyHtml = body
+    .map((p) => `<p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#374b42;">${p}</p>`)
+    .join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="x-apple-disable-message-reformatting">
+</head>
+<body style="margin:0;padding:0;background:#eef0ec;-webkit-font-smoothing:antialiased;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef0ec;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:100%;background:#ffffff;border:1px solid #e6e9e5;border-radius:16px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+
+        <tr><td style="padding:22px 32px;border-bottom:1px solid #f0f1ee;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+            <td width="44" style="vertical-align:middle;">
+              <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+                <td style="width:44px;height:44px;border-radius:22px;background:#e7ece8;text-align:center;vertical-align:middle;color:${BRAND_GREEN};font-size:14px;font-weight:700;letter-spacing:0.04em;">${escapeHtml(initialsOf(subjectName))}</td>
+              </tr></table>
+            </td>
+            <td style="padding-left:14px;vertical-align:middle;">
+              <div style="font-size:15px;font-weight:600;color:#1f2a24;line-height:1.35;">${escapeHtml(subjectName)}</div>
+              <div style="font-size:13px;color:#94a09a;line-height:1.35;">${escapeHtml(subjectMeta)}</div>
+            </td>
+            <td align="right" style="vertical-align:middle;">
+              <span style="display:inline-block;padding:6px 15px;border:1px solid ${st.border};background:${st.bg};color:${st.color};font-size:12px;font-weight:600;border-radius:999px;letter-spacing:0.02em;">${pill}</span>
+            </td>
+          </tr></table>
+        </td></tr>
+
+        <tr><td style="background:${BRAND_GREEN};padding:36px 32px;">
+          <div style="font-size:12px;letter-spacing:0.18em;text-transform:uppercase;color:#9db5a8;font-weight:600;margin:0 0 16px;">${escapeHtml(eyebrow)}</div>
+          <div style="font-size:34px;line-height:1.12;color:#ffffff;font-weight:700;margin:0 0 10px;">${escapeHtml(title)}${titleMeta ? ` <span style="font-size:16px;font-weight:400;color:#bcd0c5;letter-spacing:0;">${escapeHtml(titleMeta)}</span>` : ''}</div>
+          ${subtitle ? `<div style="font-size:15px;color:#c5d4cc;line-height:1.5;">${escapeHtml(subtitle)}</div>` : ''}
+        </td></tr>
+
+        <tr><td style="padding:30px 32px 8px;">
+          ${greeting ? `<p style="margin:0 0 18px;font-size:15px;color:#26302b;">${escapeHtml(greeting)}</p>` : ''}
+          ${bodyHtml}
+          ${rows.length ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:10px 0 4px;">${rowsHtml}</table>` : ''}
+          ${cta ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:28px 0 8px;"><tr><td style="border-radius:10px;background:${BRAND_GREEN};"><a href="${cta.url}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:13px 28px;color:#ffffff;text-decoration:none;font-size:15px;font-weight:600;">${escapeHtml(cta.label)}</a></td></tr></table>` : ''}
+          ${closing ? `<p style="margin:18px 0 4px;font-size:15px;line-height:1.65;color:#374b42;">${closing}</p>` : ''}
+        </td></tr>
+
+        <tr><td style="padding:22px 32px 30px;border-top:1px solid #f0f1ee;">
+          <div style="font-size:13px;color:#9aa39d;">${escapeHtml(BRAND)} &middot; Leave Portal</div>
+        </td></tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+};
+
 export const buildActivationEmail = (user, token) => {
   const encoded = encodeURIComponent(token);
   const url = baseUrl(`/leave/activate?token=${encoded}`);
@@ -299,7 +445,7 @@ export const buildPasswordResetEmail = (user, token) => {
       <p>A password reset was requested for your account. Use the link below to set a new password:</p>
       <p><a href="${url}" target="_blank" rel="noopener noreferrer">Reset password</a></p>
       <p>If you did not request this change, please contact support immediately.</p>
-      <p>— Paul Udo &amp; Co</p>
+      <p>— Paul Usoro &amp; Co</p>
     `,
   };
 };
@@ -311,27 +457,31 @@ export const buildLeaveRequestNotificationEmail = (approver, staff, leaveRequest
   const dates = formatLeaveDates(leaveRequest.startDate, leaveRequest.endDate);
   const approvalUrl = baseUrl('/leave/approvals');
   
+  const dur = durationLabel(leaveRequest.durationDays);
+  const docNames = (Array.isArray(leaveRequest.attachments) ? leaveRequest.attachments : [])
+    .filter((a) => a && a.filename)
+    .map((a) => a.filename);
   return {
     subject: `Leave Request from ${staffName} - Action Required`,
-    text: `Hello ${approverName},\n\n${staffName} has submitted a leave request that requires your approval.\n\nDetails:\n- Leave Type: ${leaveType.name}\n- Dates: ${dates}\n- Duration: ${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}\n- Reason: ${leaveRequest.reason}\n\nPlease review and approve this request:\n${approvalUrl}\n\n— Paul Udo &amp; Co Leave Portal`,
-    html: `
-      <p>Hello ${approverName},</p>
-      <p><strong>${staffName}</strong> has submitted a leave request that requires your approval.</p>
-      <div style="background: #f3f4f6; padding: 16px; border-radius: 8px; margin: 16px 0;">
-        <p><strong>Leave Type:</strong> ${leaveType.name}</p>
-        <p><strong>Dates:</strong> ${dates}</p>
-        <p><strong>Duration:</strong> ${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}</p>
-        <p><strong>Reason:</strong> ${leaveRequest.reason}</p>
-        ${leaveRequest.coveragePlan ? `<p><strong>Coverage Plan:</strong> ${leaveRequest.coveragePlan}</p>` : ''}
-        ${leaveRequest.handoverNotes ? `<p><strong>Handover Notes:</strong> ${leaveRequest.handoverNotes}</p>` : ''}
-      </div>
-      <p style="margin: 20px 0;">
-        <a href="${approvalUrl}" style="background: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
-          Review & Approve Request
-        </a>
-      </p>
-      <p style="color: #6b7280; font-size: 14px; margin-top: 20px;">— Paul Udo &amp; Co Leave Portal</p>
-    `,
+    text: `Hello ${approverName},\n\n${staffName} has submitted a leave request that requires your approval.\n\nDetails:\n- Leave Type: ${leaveType.name}\n- Dates: ${dates}\n- Duration: ${dur}\n- Reason: ${leaveRequest.reason}\n${docNames.length ? `- Document${docNames.length > 1 ? 's' : ''}: ${docNames.join(', ')}\n` : ''}\nPlease review and approve this request:\n${approvalUrl}\n\n— ${BRAND} Leave Portal`,
+    html: renderLeaveEmail({
+      subjectName: staffName,
+      subjectMeta: `to ${approverName} · awaiting your approval`,
+      status: 'pending',
+      eyebrow: leaveType.name,
+      title: dates,
+      titleMeta: `· ${dur}`,
+      subtitle: 'A request is waiting for your review.',
+      greeting: `Hello ${approverName},`,
+      body: [`<strong>${escapeHtml(staffName)}</strong> has submitted a leave request that requires your approval.`],
+      rows: [
+        { label: 'Reason', value: leaveRequest.reason },
+        { label: 'Coverage plan', value: leaveRequest.coveragePlan },
+        { label: 'Handover notes', value: leaveRequest.handoverNotes },
+        { label: docNames.length > 1 ? 'Documents' : 'Document', value: attachmentChips(leaveRequest.attachments), html: true },
+      ],
+      cta: { label: 'Review & approve', url: approvalUrl },
+    }),
   };
 };
 
@@ -340,47 +490,44 @@ export const buildLeaveApprovedEmail = (staff, approver, leaveRequest, leaveType
   const approverName = approver ? `${approver.firstName} ${approver.lastName}` : 'HR';
   const dates = formatLeaveDates(leaveRequest.startDate, leaveRequest.endDate);
   
+  const dur = durationLabel(leaveRequest.durationDays);
+
   if (isFinal) {
     return {
       subject: `Your Leave Request Has Been Approved`,
-      text: `Hello ${staffName},\n\nGreat news! Your leave request has been fully approved.\n\nDetails:\n- Leave Type: ${leaveType.name}\n- Dates: ${dates}\n- Duration: ${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}\n- Approved by: ${approverName}\n\nYou can view your leave requests at: ${baseUrl('/leave/requests')}\n\n— Paul Udo &amp; Co Leave Portal`,
-      html: `
-        <p>Hello ${staffName},</p>
-        <p><strong>Great news! Your leave request has been fully approved.</strong></p>
-        <div style="background: #d1fae5; padding: 16px; border-radius: 8px; margin: 16px 0; border-left: 4px solid #10b981;">
-          <p><strong>Leave Type:</strong> ${leaveType.name}</p>
-          <p><strong>Dates:</strong> ${dates}</p>
-          <p><strong>Duration:</strong> ${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}</p>
-          <p><strong>Approved by:</strong> ${approverName}</p>
-        </div>
-        <p style="margin: 20px 0;">
-          <a href="${baseUrl('/leave/requests')}" style="background: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
-            View My Requests
-          </a>
-        </p>
-        <p style="color: #6b7280; font-size: 14px; margin-top: 20px;">— Paul Udo &amp; Co Leave Portal</p>
-      `,
+      text: `Hello ${staffName},\n\nGreat news! Your leave request has been fully approved.\n\nDetails:\n- Leave Type: ${leaveType.name}\n- Dates: ${dates}\n- Duration: ${dur}\n- Approved by: ${approverName}\n\nYou can view your leave requests at: ${baseUrl('/leave/requests')}\n\n— ${BRAND} Leave Portal`,
+      html: renderLeaveEmail({
+        subjectName: staffName,
+        subjectMeta: `Approved by ${approverName}`,
+        status: 'approved',
+        eyebrow: leaveType.name,
+        title: dates,
+        titleMeta: `· ${dur}`,
+        subtitle: 'Your leave is confirmed. Enjoy your time away.',
+        greeting: `Hello ${staffName},`,
+        body: ['Good news — your leave request has been <strong>fully approved</strong>.'],
+        rows: [{ label: 'Approved by', value: approverName }],
+        cta: { label: 'View my requests', url: baseUrl('/leave/requests') },
+      }),
     };
   } else {
     // Not final approval - notify next approver
     return {
       subject: `Leave Request Approved - Forwarded for Final Review`,
-      text: `Hello ${staffName},\n\nYour leave request has been approved by ${approverName} and is now pending final approval.\n\nDetails:\n- Leave Type: ${leaveType.name}\n- Dates: ${dates}\n- Duration: ${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}\n\nYou can track the status at: ${baseUrl('/leave/requests')}\n\n— Paul Udo &amp; Co Leave Portal`,
-      html: `
-        <p>Hello ${staffName},</p>
-        <p>Your leave request has been <strong>approved by ${approverName}</strong> and is now pending final approval.</p>
-        <div style="background: #fef3c7; padding: 16px; border-radius: 8px; margin: 16px 0; border-left: 4px solid #f59e0b;">
-          <p><strong>Leave Type:</strong> ${leaveType.name}</p>
-          <p><strong>Dates:</strong> ${dates}</p>
-          <p><strong>Duration:</strong> ${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}</p>
-        </div>
-        <p style="margin: 20px 0;">
-          <a href="${baseUrl('/leave/requests')}" style="background: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
-            Track Request Status
-          </a>
-        </p>
-        <p style="color: #6b7280; font-size: 14px; margin-top: 20px;">— Paul Udo &amp; Co Leave Portal</p>
-      `,
+      text: `Hello ${staffName},\n\nYour leave request has been approved by ${approverName} and is now pending final approval.\n\nDetails:\n- Leave Type: ${leaveType.name}\n- Dates: ${dates}\n- Duration: ${dur}\n\nYou can track the status at: ${baseUrl('/leave/requests')}\n\n— ${BRAND} Leave Portal`,
+      html: renderLeaveEmail({
+        subjectName: staffName,
+        subjectMeta: `Approved by ${approverName} · awaiting final sign-off`,
+        status: 'review',
+        eyebrow: leaveType.name,
+        title: dates,
+        titleMeta: `· ${dur}`,
+        subtitle: 'One more approval to go.',
+        greeting: `Hello ${staffName},`,
+        body: [`Your leave request has been <strong>approved by ${escapeHtml(approverName)}</strong> and is now pending final approval.`],
+        rows: [{ label: 'Approved by', value: approverName }],
+        cta: { label: 'Track request status', url: baseUrl('/leave/requests') },
+      }),
     };
   }
 };
@@ -390,47 +537,48 @@ export const buildLeaveRejectedEmail = (staff, approver, leaveRequest, leaveType
   const approverName = approver ? `${approver.firstName} ${approver.lastName}` : 'HR';
   const dates = formatLeaveDates(leaveRequest.startDate, leaveRequest.endDate);
   
+  const dur = durationLabel(leaveRequest.durationDays);
   return {
     subject: `Your Leave Request Has Been Declined`,
-    text: `Hello ${staffName},\n\nUnfortunately, your leave request has been declined by ${approverName}.\n\nDetails:\n- Leave Type: ${leaveType.name}\n- Dates: ${dates}\n- Duration: ${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}\n${comment ? `- Reason: ${comment}\n` : ''}\nYou can view your leave requests at: ${baseUrl('/leave/requests')}\n\n— Paul Udo &amp; Co Leave Portal`,
-    html: `
-      <p>Hello ${staffName},</p>
-      <p>Unfortunately, your leave request has been <strong>declined by ${approverName}</strong>.</p>
-      <div style="background: #fee2e2; padding: 16px; border-radius: 8px; margin: 16px 0; border-left: 4px solid #ef4444;">
-        <p><strong>Leave Type:</strong> ${leaveType.name}</p>
-        <p><strong>Dates:</strong> ${dates}</p>
-        <p><strong>Duration:</strong> ${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}</p>
-        ${comment ? `<p><strong>Reason:</strong> ${comment}</p>` : ''}
-      </div>
-      <p style="margin: 20px 0;">
-        <a href="${baseUrl('/leave/requests')}" style="background: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
-          View My Requests
-        </a>
-      </p>
-      <p style="color: #6b7280; font-size: 14px; margin-top: 20px;">— Paul Udo &amp; Co Leave Portal</p>
-    `,
+    text: `Hello ${staffName},\n\nUnfortunately, your leave request has been declined by ${approverName}.\n\nDetails:\n- Leave Type: ${leaveType.name}\n- Dates: ${dates}\n- Duration: ${dur}\n${comment ? `- Reason: ${comment}\n` : ''}\nYou can view your leave requests at: ${baseUrl('/leave/requests')}\n\n— ${BRAND} Leave Portal`,
+    html: renderLeaveEmail({
+      subjectName: staffName,
+      subjectMeta: `Reviewed by ${approverName}`,
+      status: 'declined',
+      eyebrow: leaveType.name,
+      title: dates,
+      titleMeta: `· ${dur}`,
+      subtitle: 'This request was not approved.',
+      greeting: `Hello ${staffName},`,
+      body: [`Unfortunately, your leave request has been <strong>declined by ${escapeHtml(approverName)}</strong>.`],
+      rows: [{ label: 'Reason', value: comment }],
+      cta: { label: 'View my requests', url: baseUrl('/leave/requests') },
+      closing: 'If you have questions, please reach out to the People Team.',
+    }),
   };
 };
 
 // Flexible leave notice — used for withdrawal request/confirm/decline notifications.
-export const buildLeaveNoticeEmail = ({ recipientName = 'there', subject, intro, leaveRequest, leaveType, extra }) => {
+export const buildLeaveNoticeEmail = ({ recipientName = 'there', subject, intro, leaveRequest, leaveType, extra, status = 'pending', statusLabel, subtitle = 'A leave update for your attention.' }) => {
   const dates = formatLeaveDates(leaveRequest.startDate, leaveRequest.endDate);
-  const dur = `${leaveRequest.durationDays} ${leaveRequest.durationDays === 1 ? 'day' : 'days'}`;
+  const dur = durationLabel(leaveRequest.durationDays);
   return {
     subject,
-    text: `Hello ${recipientName},\n\n${intro.replace(/<[^>]+>/g, '')}\n\nDetails:\n- Leave Type: ${leaveType?.name || 'Leave'}\n- Dates: ${dates}\n- Duration: ${dur}\n${extra ? `- ${extra}\n` : ''}\nOpen: ${baseUrl('/leave/requests')}\n\n— Paul Usoro & Co Leave Portal`,
-    html: `
-      <p>Hello ${recipientName},</p>
-      <p>${intro}</p>
-      <div style="background:#f1f5f9;padding:16px;border-radius:8px;margin:16px 0;border-left:4px solid #10b981;">
-        <p><strong>Leave Type:</strong> ${leaveType?.name || 'Leave'}</p>
-        <p><strong>Dates:</strong> ${dates}</p>
-        <p><strong>Duration:</strong> ${dur}</p>
-        ${extra ? `<p><strong>${extra}</strong></p>` : ''}
-      </div>
-      <p style="margin:20px 0;"><a href="${baseUrl('/leave/requests')}" style="background:#10b981;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;display:inline-block;font-weight:600;">Open Leave</a></p>
-      <p style="color:#6b7280;font-size:14px;margin-top:20px;">— Paul Usoro &amp; Co Leave Portal</p>
-    `,
+    text: `Hello ${recipientName},\n\n${intro.replace(/<[^>]+>/g, '')}\n\nDetails:\n- Leave Type: ${leaveType?.name || 'Leave'}\n- Dates: ${dates}\n- Duration: ${dur}\n${extra ? `- ${extra}\n` : ''}\nOpen: ${baseUrl('/leave/requests')}\n\n— ${BRAND} Leave Portal`,
+    html: renderLeaveEmail({
+      subjectName: recipientName,
+      subjectMeta: subject,
+      status,
+      statusLabel,
+      eyebrow: leaveType?.name || 'Leave',
+      title: dates,
+      titleMeta: `· ${dur}`,
+      subtitle,
+      greeting: `Hello ${recipientName},`,
+      body: [intro],
+      rows: extra ? [{ label: 'Note', value: extra }] : [],
+      cta: { label: 'Open leave', url: baseUrl('/leave/requests') },
+    }),
   };
 };
 
