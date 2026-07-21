@@ -147,7 +147,9 @@ const adjustBalanceOnCancellation = async ({ staffId, leaveTypeId, period, durat
   );
 };
 
-const buildApproverChain = (staffDoc) => {
+const ROLE_LABELS = { teamLead: 'Team Lead', lineManager: 'Line Manager', hr: 'HR' };
+
+export const buildApproverChain = (staffDoc) => {
   const chain = [];
 
   const resolveId = (val) => {
@@ -169,7 +171,28 @@ const buildApproverChain = (staffDoc) => {
   const hr = resolveId(staffDoc.hrId);
   chain.push({ role: 'hr', assignee: hr || null });
 
-  return chain.map((step) => ({ ...step, status: 'pending' }));
+  // Where several roles resolve to the SAME person, they approve once — the first
+  // step stays actionable and the later ones are marked 'skipped'. The roles are
+  // still recorded so the chain shows who covered what; only the repetition goes.
+  // An unassigned HR step (assignee null = any HR) is never collapsed into a named
+  // approver: that's a different person, not a repeat.
+  const actionedBy = new Map(); // assignee id -> role of the step that will action it
+
+  return chain.map((step) => {
+    const key = step.assignee ? String(step.assignee) : null;
+
+    if (key && actionedBy.has(key)) {
+      const coveringRole = actionedBy.get(key);
+      return {
+        ...step,
+        status: 'skipped',
+        comment: `Same approver as the ${ROLE_LABELS[coveringRole] || coveringRole} step — approved once.`,
+      };
+    }
+
+    if (key) actionedBy.set(key, step.role);
+    return { ...step, status: 'pending' };
+  });
 };
 
 const deriveStatusFromChain = (chain) => {
